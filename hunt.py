@@ -2,8 +2,7 @@
 import os
 import subprocess
 import shutil
-import json
-import datetime
+from datetime import datetime
 from colorama import Fore, Style, init as colorama_init
 from pyfiglet import figlet_format
 from termcolor import colored
@@ -14,36 +13,52 @@ colorama_init(autoreset=True)
 # ===== base paths =====
 HOME = os.path.expanduser("~")
 
-BBP_BASE = os.path.join(HOME, "bug-hunting", "bbp")  # temp / recon workspace
-FULLPOWER_BASE = os.path.join(HOME, "bug-hunting", "fullpower")  # final reports fullpower
-ATTACK_BASE = os.path.join(HOME, "bug-hunting")  # we'll create bugtype dirs here
-WL_BASE = os.path.join(HOME, "Bug-Hunting", "wordlist")  # wordlists from setup.sh
+BBP_BASE        = os.path.join(HOME, "bug-hunting", "bbp")          # workspace temp per-target
+FULLPOWER_BASE  = os.path.join(HOME, "bug-hunting", "fullpower")    # fullpower final
+ATTACK_BASE     = os.path.join(HOME, "bug-hunting")                 # attack-focus final dir under bugtype
+CUSTOM_BASE     = os.path.join(HOME, "bug-hunting", "custom")       # custom chain final
+XRAY_BASE       = os.path.join(HOME, "bug-hunting", "xray")         # xray scan final
+WL_BASE         = os.path.join(HOME, "Bug-Hunting", "wordlist")     # wordlists from setup.sh
 
-os.makedirs(BBP_BASE, exist_ok=True)
-os.makedirs(FULLPOWER_BASE, exist_ok=True)
+for p in [BBP_BASE, FULLPOWER_BASE, CUSTOM_BASE, XRAY_BASE]:
+    os.makedirs(p, exist_ok=True)
 
 # ===== helpers =====
-def banner():
-    title = figlet_format("HUNT", font="slant")
+def big_banner():
+    title = figlet_format("BUG-HUNTING", font="slant")
     print(colored(title, "cyan"))
-    print(Fore.MAGENTA + "    Bug Bounty Recon Console")
-    print(Fore.MAGENTA + "    use with permission only 🚨\n")
-    print(Fore.YELLOW + "Temp dir     : ~/bug-hunting/bbp/<target>/ (scan sementara .txt)")
-    print(Fore.YELLOW + "FullPower dir: ~/bug-hunting/fullpower/<target>/ (nuclei.txt + final.json)")
-    print(Fore.YELLOW + "Attack dir   : ~/bug-hunting/<bugtype>/<target>/ (bugtype.txt + result.json)\n")
+    print(Fore.MAGENTA + "          recon  •  fuzz  •  vuln scan")
+    print(Fore.RED +    "      USE ONLY WITH PERMISSION. SERIUS. 🚨\n")
+    print(Fore.YELLOW + " Temp      : ~/bug-hunting/bbp/<target>/")
+    print(Fore.YELLOW + " FullPower : ~/bug-hunting/fullpower/<target>/fullpower.json")
+    print(Fore.YELLOW + " Attack    : ~/bug-hunting/<bugtype>/<target>/result.json")
+    print(Fore.YELLOW + " Custom    : ~/bug-hunting/custom/<target>/custom.json")
+    print(Fore.YELLOW + " Xray      : ~/bug-hunting/xray/<target>/xray.json\n")
 
-def menu():
-    print(Fore.CYAN + "[0] FULL POWER (subfinder -> httpx -> nuclei)")
-    print(Fore.CYAN + "[1] subfinder")
-    print(Fore.CYAN + "[2] httpx")
-    print(Fore.CYAN + "[3] gau")
-    print(Fore.CYAN + "[4] nuclei")
-    print(Fore.CYAN + "[5] hakrawler")
-    print(Fore.CYAN + "[6] ffuf")
-    print(Fore.CYAN + "[7] gf")
-    print(Fore.CYAN + "[8] dalfox")
-    print(Fore.CYAN + "[9] exit")
-    print(Fore.CYAN + "[10] ATTACK FOCUS (xss / sqli / lfi chain)\n")
+def recon_banner():
+    title = figlet_format("RECON", font="slant")
+    print(colored(title, "green"))
+    print(Fore.CYAN + "Subdomain enum, live hosts, crawling, fuzz, etc.\n")
+
+def xray_banner():
+    title = figlet_format("XRAY", font="slant")
+    print(colored(title, "red"))
+    print(Fore.CYAN + "High-signal vuln scanner (chaitin/xray)\n")
+
+def attack_banner():
+    title = figlet_format("ATTACK", font="slant")
+    print(colored(title, "yellow"))
+    print(Fore.CYAN + "Chain: gau -> gf -> httpx -> exploit-tool\n")
+
+def fullpower_banner():
+    title = figlet_format("FULL POWER", font="slant")
+    print(colored(title, "magenta"))
+    print(Fore.CYAN + "subfinder -> httpx -> nuclei (auto). Temp cleaned.\n")
+
+def custom_banner():
+    title = figlet_format("CUSTOM", font="slant")
+    print(colored(title, "blue"))
+    print(Fore.CYAN + "You pick the combo. I execute in that order.\n")
 
 def ask(prompt, default=None):
     if default is not None:
@@ -64,8 +79,11 @@ def sanitize_target_for_dir(s):
 def ensure_dir(path):
     os.makedirs(path, exist_ok=True)
 
-def run_cmd(cmd, cwd=None, shell=False):
-    """Run command and stream output."""
+def run_cmd(cmd, shell=False):
+    """
+    Run a command and stream output live.
+    cmd: list (if shell=False) OR string (if shell=True)
+    """
     preview = cmd if shell else " ".join(cmd)
     print(Fore.YELLOW + "\n[CMD] " + preview)
     print(Fore.YELLOW + "--------------------------------------------------\n")
@@ -79,14 +97,15 @@ def run_cmd(cmd, cwd=None, shell=False):
     except Exception as e:
         print(Fore.RED + f"[!] Error running command: {e}\n")
 
+# =====================================================================
+# LOW-LEVEL RUNNERS (single tools, interactive)
+# =====================================================================
 
-# ===== basic tool runners =====
-
-def run_subfinder():
-    target = ask("Target domain (e.g. example.com)")
+def run_subfinder_interactive():
+    target = ask("Target domain (example.com)")
     threads = ask("Threads for subfinder (-t)", default="200")
 
-    tclean = sanitize_target_for_dir(target)
+    tclean   = sanitize_target_for_dir(target)
     temp_dir = os.path.join(BBP_BASE, tclean)
     ensure_dir(temp_dir)
 
@@ -103,25 +122,25 @@ def run_subfinder():
     print(Fore.CYAN + f"\n[+] Output -> {out_file}")
     run_cmd(cmd)
 
-def run_httpx():
-    # user kasih nama target (folder)
-    target = ask("Target name (folder under bbp/, e.g. example.com)")
-    tclean = sanitize_target_for_dir(target)
+def run_httpx_interactive():
+    # user picks which target folder (bbp/<target>/subs.txt)
+    target_name = ask("Target name (folder under bbp/, e.g. example.com)")
+    tclean   = sanitize_target_for_dir(target_name)
     temp_dir = os.path.join(BBP_BASE, tclean)
+    subs_txt = os.path.join(temp_dir, "subs.txt")
 
-    subs_path = os.path.join(temp_dir, "subs.txt")
-    if not os.path.isfile(subs_path):
-        print(Fore.RED + f"[!] subs.txt not found at {subs_path}")
-        subs_path = ask("Custom path to list for httpx -l")
+    if not os.path.isfile(subs_txt):
+        print(Fore.RED + f"[!] subs.txt not found at {subs_txt}")
+        subs_txt = ask("Custom path for httpx -l")
 
     threads = ask("Threads for httpx (-t)", default="100")
-    mc = ask("Match status code (-mc)", default="200")
+    mc      = ask("Match status code (-mc)", default="200")
 
     out_file = os.path.join(temp_dir, "httpx.txt")
 
     cmd = [
         "httpx",
-        "-l", subs_path,
+        "-l", subs_txt,
         "-mc", mc,
         "-t", threads,
         "-silent",
@@ -131,9 +150,9 @@ def run_httpx():
     print(Fore.CYAN + f"\n[+] Output -> {out_file}")
     run_cmd(cmd)
 
-def run_gau():
-    target = ask("Target domain for gau (e.g. example.com)")
-    tclean = sanitize_target_for_dir(target)
+def run_gau_interactive():
+    target = ask("Target domain for gau (example.com)")
+    tclean   = sanitize_target_for_dir(target)
     temp_dir = os.path.join(BBP_BASE, tclean)
     ensure_dir(temp_dir)
 
@@ -143,17 +162,17 @@ def run_gau():
     print(Fore.CYAN + f"\n[+] Output -> {out_file}")
     run_cmd(shell_cmd, shell=True)
 
-def run_nuclei():
-    mode = ask("Scan single URL or list? (single/list)", default="list").lower()
-    sev = ask("Severity filter (critical,high,medium,low,info) OR blank for ALL", default="")
-    conc = ask("Concurrency (-c)", default="50")
+def run_nuclei_interactive():
+    mode  = ask("Scan single URL or list? (single/list)", default="list").lower()
+    sev   = ask("Severity filter (critical,high,medium,low,info) OR blank for ALL", default="")
+    conc  = ask("Concurrency (-c)", default="50")
 
     if mode == "single":
         single_url = ask("Single URL (https://target.com)")
-        tclean = sanitize_target_for_dir(single_url)
-        temp_dir = os.path.join(BBP_BASE, tclean)
+        tclean     = sanitize_target_for_dir(single_url)
+        temp_dir   = os.path.join(BBP_BASE, tclean)
         ensure_dir(temp_dir)
-        out_file = os.path.join(temp_dir, "nuclei.txt")
+        out_file   = os.path.join(temp_dir, "nuclei.txt")
 
         base_cmd = [
             "nuclei",
@@ -162,20 +181,20 @@ def run_nuclei():
             "-o", out_file
         ]
     else:
-        base = ask("Target name (folder under bbp/, e.g. example.com)")
-        tclean = sanitize_target_for_dir(base)
-        temp_dir = os.path.join(BBP_BASE, tclean)
+        base        = ask("Target name (folder under bbp/, e.g. example.com)")
+        tclean      = sanitize_target_for_dir(base)
+        temp_dir    = os.path.join(BBP_BASE, tclean)
         ensure_dir(temp_dir)
-        live_list = os.path.join(temp_dir, "httpx.txt")
-        if not os.path.isfile(live_list):
-            print(Fore.RED + f"[!] {live_list} not found, give custom list path")
-            live_list = ask("Custom path for nuclei -l")
+        httpx_list  = os.path.join(temp_dir, "httpx.txt")
+        if not os.path.isfile(httpx_list):
+            print(Fore.RED + f"[!] {httpx_list} not found, provide custom list path")
+            httpx_list = ask("Custom path for nuclei -l")
 
         out_file = os.path.join(temp_dir, "nuclei.txt")
 
         base_cmd = [
             "nuclei",
-            "-l", live_list,
+            "-l", httpx_list,
             "-c", conc,
             "-o", out_file
         ]
@@ -186,12 +205,12 @@ def run_nuclei():
     print(Fore.CYAN + f"\n[+] Output -> {out_file}")
     run_cmd(base_cmd)
 
-def run_hakrawler():
-    start_url = ask("Start URL (https://target.com)")
-    include_subs = ask("Include subdomains? (y/n)", default="y").lower()
-    depth = ask("Max depth (-d)", default="2")
+def run_hakrawler_interactive():
+    start_url     = ask("Start URL (https://target.com)")
+    include_subs  = ask("Include subdomains? (y/n)", default="y").lower()
+    depth         = ask("Max depth (-d)", default="2")
 
-    tclean = sanitize_target_for_dir(start_url)
+    tclean   = sanitize_target_for_dir(start_url)
     temp_dir = os.path.join(BBP_BASE, tclean)
     ensure_dir(temp_dir)
 
@@ -205,9 +224,9 @@ def run_hakrawler():
     print(Fore.CYAN + f"\n[+] Output -> {out_file}")
     run_cmd(base_cmd, shell=True)
 
-def run_ffuf():
-    target_url = ask("Target fuzz URL (use FUZZ, ex: https://site.com/FUZZ or ...?q=FUZZ)")
-    tclean = sanitize_target_for_dir(target_url)
+def run_ffuf_interactive():
+    target_url = ask("Target fuzz URL (must contain FUZZ, ex: https://site.com/FUZZ or ...?q=FUZZ)")
+    tclean   = sanitize_target_for_dir(target_url)
     temp_dir = os.path.join(BBP_BASE, tclean)
     ensure_dir(temp_dir)
 
@@ -237,7 +256,7 @@ def run_ffuf():
         wl_path = wl_map.get(wl_choice, wl_map["1"])
 
     threads = ask("Threads (-t)", default="50")
-    mc = ask("Match status code (-mc)", default="200")
+    mc      = ask("Match status code (-mc)", default="200")
 
     out_file = os.path.join(temp_dir, "ffuf.txt")
 
@@ -256,12 +275,13 @@ def run_ffuf():
     print(Fore.CYAN + f"\n[+] Output -> {out_file}")
     run_cmd(cmd)
 
-def run_gf():
-    list_path = ask("Path to list of URLs/params (e.g. ~/bug-hunting/bbp/target/gau.txt)")
-    pattern = ask("gf pattern (xss,sqli,lfi,redirect,ssti,...)", default="xss")
+def run_gf_interactive():
+    list_path = ask("Path to list of URLs/params (ex: ~/bug-hunting/bbp/target/gau.txt)")
+    pattern   = ask("gf pattern (xss,sqli,lfi,redirect,ssti,...)", default="xss")
 
-    # infer dir name: parent of the list file
-    tclean = sanitize_target_for_dir(os.path.basename(os.path.dirname(list_path)))
+    # try to infer target dir name from list_path parent
+    tguess   = os.path.basename(os.path.dirname(list_path))
+    tclean   = sanitize_target_for_dir(tguess)
     temp_dir = os.path.join(BBP_BASE, tclean)
     ensure_dir(temp_dir)
 
@@ -271,10 +291,10 @@ def run_gf():
     print(Fore.CYAN + f"\n[+] Output -> {out_file}")
     run_cmd(shell_cmd, shell=True)
 
-def run_dalfox():
-    mode = ask("Scan single URL or file list? (single/list)", default="list").lower()
-    skip_mining = ask("Skip mining? (--skip-mining-all) y/n", default="y").lower()
-    conc = ask("Concurrency (--worker)", default="30")
+def run_dalfox_interactive():
+    mode         = ask("Scan single URL or file list? (single/list)", default="list").lower()
+    skip_mining  = ask("Skip mining? (--skip-mining-all) y/n", default="y").lower()
+    conc         = ask("Concurrency (--worker)", default="30")
 
     payload_file = os.path.join(WL_BASE, "xss-payloadbox.txt")
     if not os.path.isfile(payload_file):
@@ -282,18 +302,19 @@ def run_dalfox():
 
     if mode == "single":
         target_url = ask("Target URL for dalfox (ex: https://site.com/vuln.php?x=FUZZ)")
-        tclean = sanitize_target_for_dir(target_url)
-        temp_dir = os.path.join(BBP_BASE, tclean)
+        tclean     = sanitize_target_for_dir(target_url)
+        temp_dir   = os.path.join(BBP_BASE, tclean)
         ensure_dir(temp_dir)
-        out_file = os.path.join(temp_dir, "dalfox.txt")
+        out_file   = os.path.join(temp_dir, "dalfox.txt")
 
         base_cmd = f"dalfox url {target_url} --custom-payload {payload_file} --worker {conc}"
     else:
         list_path = ask("Path to list of URLs (for dalfox file mode)")
-        tclean = sanitize_target_for_dir(os.path.basename(os.path.dirname(list_path)))
-        temp_dir = os.path.join(BBP_BASE, tclean)
+        tguess    = os.path.basename(os.path.dirname(list_path))
+        tclean    = sanitize_target_for_dir(tguess)
+        temp_dir  = os.path.join(BBP_BASE, tclean)
         ensure_dir(temp_dir)
-        out_file = os.path.join(temp_dir, "dalfox.txt")
+        out_file  = os.path.join(temp_dir, "dalfox.txt")
 
         base_cmd = f"dalfox file {list_path} --custom-payload {payload_file} --worker {conc}"
 
@@ -305,34 +326,89 @@ def run_dalfox():
     print(Fore.CYAN + f"\n[+] Output -> {out_file}")
     run_cmd(base_cmd, shell=True)
 
+def run_xray_interactive():
+    """
+    xray modes we support:
+      - single URL  : xray webscan --url https://target --json-output out.json
+      - multi file  : xray webscan --url-file urls.txt --json-output out.json
+    optional: --plugins plugin1,plugin2
+    """
+    mode    = ask("Scan mode? (single/list)", default="single").lower()
+    plugins = ask("Plugins list (comma, blank=all)", default="")
+    # examples from doc:
+    #   cmd-injection,sqldet  etc
+    # ref: xray webscan --plugins cmd-injection,sqldet --url http://example.com
+    # source: sysin.org article on xray usage. 0
 
-# ===== FULL POWER MODE =====
-def run_fullpower():
-    # ask target + threads
-    target = ask("Target root (example.com, NOT https://)")
-    speed = ask("Threads (-t/-c all tools)", default="50")
+    if mode == "single":
+        url = ask("Target URL (https://target.com)")
+        tclean = sanitize_target_for_dir(url)
+    else:
+        # list mode
+        url_file_choice = ask("Use bbp/<target>/httpx.txt ? (y/n)", default="y").lower()
+        if url_file_choice.startswith("y"):
+            base_target = ask("Target name in bbp (e.g. example.com)")
+            tclean = sanitize_target_for_dir(base_target)
+            httpx_file = os.path.join(BBP_BASE, tclean, "httpx.txt")
+            if not os.path.isfile(httpx_file):
+                print(Fore.RED + f"[!] {httpx_file} not found, fallback custom path.")
+                httpx_file = ask("Custom path to URL list for xray --url-file")
+            list_path = httpx_file
+        else:
+            list_path = ask("Custom path to URL list for xray --url-file")
+            tguess    = os.path.basename(os.path.dirname(list_path))
+            tclean    = sanitize_target_for_dir(tguess)
 
-    tclean = sanitize_target_for_dir(target)
+    final_dir = os.path.join(XRAY_BASE, tclean)
+    ensure_dir(final_dir)
 
-    temp_dir = os.path.join(BBP_BASE, tclean)            # temp .txt
+    out_json = os.path.join(final_dir, "xray.json")
+
+    # build cmd
+    if mode == "single":
+        base_cmd = f"xray webscan --url \"{url}\""
+    else:
+        base_cmd = f"xray webscan --url-file \"{list_path}\""
+
+    if plugins != "":
+        base_cmd += f" --plugins {plugins}"
+
+    base_cmd += f" --json-output \"{out_json}\""
+
+    print(Fore.CYAN + f"\n[+] Final report -> {out_json}")
+    run_cmd(base_cmd, shell=True)
+
+# =====================================================================
+# AUTO MODES (fullpower / attack-focus / custom chain)
+# =====================================================================
+
+def run_fullpower_auto():
+    fullpower_banner()
+
+    # ask target + global speed
+    target = ask("Target root (example.com, no https://)")
+    speed  = ask("Threads (-t / -c for all tools)", default="50")
+
+    tclean    = sanitize_target_for_dir(target)
+
+    temp_dir  = os.path.join(BBP_BASE, tclean)
     ensure_dir(temp_dir)
 
-    final_dir = os.path.join(FULLPOWER_BASE, tclean)     # final folder
+    final_dir = os.path.join(FULLPOWER_BASE, tclean)
     ensure_dir(final_dir)
 
     subs_file    = os.path.join(temp_dir, "subs.txt")
     httpx_file   = os.path.join(temp_dir, "httpx.txt")
-    nuclei_raw   = os.path.join(final_dir, "nuclei.txt")     # raw nuclei output (.txt)
-    final_report = os.path.join(final_dir, "final.json")     # summary json
+    nuclei_final = os.path.join(final_dir, "fullpower.json")
 
-    timestamp = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
+    timestamp = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
     print(Fore.MAGENTA + f"\n[ FULL POWER @ {timestamp} ]")
-    print(Fore.MAGENTA + f"Target   : {target}")
-    print(Fore.MAGENTA + f"Temp dir : {temp_dir}")
-    print(Fore.MAGENTA + f"Final    : {final_dir}")
+    print(Fore.MAGENTA + f"Target    : {target}")
+    print(Fore.MAGENTA + f"Temp dir  : {temp_dir}")
+    print(Fore.MAGENTA + f"Final json: {nuclei_final}")
     print(Fore.YELLOW  + "\nChain: subfinder -> httpx -> nuclei\n")
 
-    # 1. subfinder
+    # 1. subfinder -> subs.txt
     cmd_subfinder = [
         "subfinder",
         "-d", target,
@@ -343,7 +419,7 @@ def run_fullpower():
     print(Fore.CYAN + "\n[1] subfinder -> subs.txt")
     run_cmd(cmd_subfinder)
 
-    # 2. httpx
+    # 2. httpx -> httpx.txt
     cmd_httpx = [
         "httpx",
         "-l", subs_file,
@@ -355,33 +431,17 @@ def run_fullpower():
     print(Fore.CYAN + "\n[2] httpx -> httpx.txt")
     run_cmd(cmd_httpx)
 
-    # 3. nuclei (raw nuclei output jadi nuclei.txt)
+    # 3. nuclei -> final json
     cmd_nuclei = [
         "nuclei",
         "-l", httpx_file,
         "-c", speed,
-        "-o", nuclei_raw
+        "-o", nuclei_final
     ]
-    print(Fore.CYAN + "\n[3] nuclei -> nuclei.txt")
+    print(Fore.CYAN + "\n[3] nuclei -> fullpower.json")
     run_cmd(cmd_nuclei)
 
-    # Build summary JSON (final.json)
-    summary = {
-        "target": target,
-        "timestamp_utc": timestamp,
-        "subdomains_file": subs_file,
-        "alive_hosts_file": httpx_file,
-        "nuclei_raw_file": nuclei_raw,
-        "note": "Raw scan outputs are in .txt, this is just metadata summary."
-    }
-    try:
-        with open(final_report, "w") as jf:
-            jf.write(json.dumps(summary, indent=2))
-        print(Fore.GREEN + f"[+] Wrote summary -> {final_report}")
-    except Exception as e:
-        print(Fore.RED + f"[!] Failed to write {final_report}: {e}")
-
-    # cleanup temp (subs.txt & httpx.txt) ONLY temp
+    # cleanup temp
     for f in [subs_file, httpx_file]:
         if os.path.isfile(f):
             try:
@@ -391,56 +451,43 @@ def run_fullpower():
                 print(Fore.RED + f"[!] failed to remove {f}")
 
     print(Fore.GREEN + "\n[✓] Full power finished.")
-    print(Fore.GREEN + f"    nuclei raw   -> {nuclei_raw}")
-    print(Fore.GREEN + f"    final report -> {final_report}\n")
+    print(Fore.GREEN + f"    Report -> {nuclei_final}\n")
 
+def run_attack_focus_auto():
+    attack_banner()
 
-# ===== ATTACK FOCUS MODE =====
-def run_attack_focus():
-    # 1) ask basic info
-    target = ask("Target root (example.com)")
+    target   = ask("Target root (example.com)")
     bug_type = ask("Bug type? (xss / sqli / lfi)", default="xss").lower()
-    speed = ask("Speed / threads (default 50)", default="50")
+    speed    = ask("Speed / threads (default 50)", default="50")
 
-    tclean = sanitize_target_for_dir(target)
+    tclean   = sanitize_target_for_dir(target)
 
-    # temp dir for work (bbp/<target>) -> semua .txt sementara
     temp_dir = os.path.join(BBP_BASE, tclean)
     ensure_dir(temp_dir)
 
-    # final dir for this bugtype
-    # ~/bug-hunting/<bugtype>/<target>/
     final_dir = os.path.join(ATTACK_BASE, bug_type, tclean)
     ensure_dir(final_dir)
 
-    # sementara
-    gau_raw     = os.path.join(temp_dir, "gau_raw.txt")      # full crawl
-    focus_raw   = os.path.join(temp_dir, "focus_raw.txt")    # filtered by gf
-    focus_alive = os.path.join(temp_dir, "focus_alive.txt")  # only live 200
+    gau_raw      = os.path.join(temp_dir, "gau_raw.txt")      # step dump
+    focus_raw    = os.path.join(temp_dir, "focus_raw.txt")    # gf-filtered
+    focus_alive  = os.path.join(temp_dir, "focus_alive.txt")  # httpx alive
+    result_json  = os.path.join(final_dir, "result.json")     # final json/report
 
-    # final
-    raw_report  = os.path.join(final_dir, f"{bug_type}.txt") # dalfox.txt/sqlmap.txt/nuclei.txt equivalent
-    result_json = os.path.join(final_dir, "result.json")     # summary metadata
+    print(Fore.YELLOW + f"\nTemp dir : {temp_dir}")
+    print(Fore.YELLOW + f"Final    : {result_json}")
 
-    print(Fore.MAGENTA + "\n[ ATTACK FOCUS MODE ]")
-    print(Fore.MAGENTA + f"Target      : {target}")
-    print(Fore.MAGENTA + f"Bug type    : {bug_type}")
-    print(Fore.MAGENTA + f"Temp dir    : {temp_dir}")
-    print(Fore.MAGENTA + f"Final dir   : {final_dir}")
-    print(Fore.YELLOW  + "\nChain: gau -> gf(type filter) -> httpx(200) -> exploit tool\n")
-
-    # STEP 1: GAU
+    # 1) gau
     shell_gau = f"gau --subs {target} | tee {gau_raw}"
     print(Fore.CYAN + "\n[1] gau -> gau_raw.txt")
     run_cmd(shell_gau, shell=True)
 
-    # STEP 2: GF FILTER
-    gf_pattern = bug_type  # expects xss/sqli/lfi/etc in ~/.gf
-    shell_gf = f"cat {gau_raw} | gf {gf_pattern} | tee {focus_raw}"
+    # 2) gf filter
+    gf_pattern = bug_type  # expects ~/.gf/xss.json / sqli.json / lfi.json dll
+    shell_gf   = f"cat {gau_raw} | gf {gf_pattern} | tee {focus_raw}"
     print(Fore.CYAN + "\n[2] gf -> focus_raw.txt")
     run_cmd(shell_gf, shell=True)
 
-    # STEP 3: HTTPX -> only alive 200
+    # 3) httpx (alive 200 only)
     cmd_httpx = [
         "httpx",
         "-l", focus_raw,
@@ -449,66 +496,42 @@ def run_attack_focus():
         "-silent",
         "-o", focus_alive
     ]
-    print(Fore.CYAN + "\n[3] httpx (200 only) -> focus_alive.txt")
+    print(Fore.CYAN + "\n[3] httpx -> focus_alive.txt")
     run_cmd(cmd_httpx)
 
-    # STEP 4: EXPLOIT TOOL -> save RAW tool output into raw_report (.txt)
-    print(Fore.CYAN + "\n[4] exploitation -> raw_report (.txt)")
+    # 4) exploit step
+    print(Fore.CYAN + "\n[4] exploit -> result.json")
 
     if bug_type == "xss":
-        # dalfox
         payload_file = os.path.join(WL_BASE, "xss-payloadbox.txt")
-        if not os.path.isfile(payload_file):
-            payload_file = payload_file  # fallback, user may adjust manually
-
         shell_dalfox = (
             f"dalfox file {focus_alive} "
             f"--custom-payload {payload_file} "
             f"--worker {speed} "
             f"--skip-mining-all "
-            f"| tee {raw_report}"
+            f"| tee {result_json}"
         )
         run_cmd(shell_dalfox, shell=True)
 
     elif bug_type == "sqli":
-        # sqlmap per URL
         shell_sqlmap = (
             "while read -r url; do "
             "echo '[*] Testing SQLi:' \"$url\"; "
             "sqlmap -u \"$url\" --batch --level=1 --risk=1 --random-agent --smart --flush-session; "
-            "done < " + focus_alive + " | tee " + raw_report
+            "done < " + focus_alive + " | tee " + result_json
         )
         run_cmd(shell_sqlmap, shell=True)
 
     elif bug_type == "lfi":
-        # nuclei on possible LFI params
         shell_nuclei = (
-            f"nuclei -l {focus_alive} -c {speed} | tee {raw_report}"
+            f"nuclei -l {focus_alive} -c {speed} -o {result_json}"
         )
         run_cmd(shell_nuclei, shell=True)
 
     else:
-        print(Fore.RED + f"[!] Unknown bug_type '{bug_type}'. Supported: xss / sqli / lfi")
-        print(Fore.RED + "    Skipping exploit step.")
+        print(Fore.RED + f"[!] Unsupported bug_type '{bug_type}' -> skipping exploit step")
 
-    # STEP 5: summary result.json
-    stamp = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
-    summary_data = {
-        "target": target,
-        "bug_type": bug_type,
-        "threads_used": speed,
-        "raw_output_file": raw_report,
-        "timestamp_utc": stamp,
-        "note": "raw_output_file is .txt with tool results; this JSON is just metadata."
-    }
-    try:
-        with open(result_json, "w") as jf:
-            jf.write(json.dumps(summary_data, indent=2))
-        print(Fore.GREEN + f"[+] Wrote final summary -> {result_json}")
-    except Exception as e:
-        print(Fore.RED + f"[!] Failed to write {result_json}: {e}")
-
-    # STEP 6: CLEANUP TEMP FILES (hanya sementara bbp)
+    # cleanup temp stage files
     for f in [gau_raw, focus_raw, focus_alive]:
         if os.path.isfile(f):
             try:
@@ -517,46 +540,38 @@ def run_attack_focus():
             except:
                 print(Fore.RED + f"[!] failed to remove {f}")
 
-    print(Fore.GREEN + "\n[✓] Attack focus finished.")
-    print(Fore.GREEN + f"    Raw exploit log -> {raw_report}")
-    print(Fore.GREEN + f"    Summary JSON    -> {result_json}\n")
+    print(Fore.GREEN + "\n[✓] Attack focus done.")
+    print(Fore.GREEN + f"    Final report -> {result_json}\n")
 
+def run_custom_chain_auto():
+    """
+    Ini mode freestyle buat lo:
+      - tanya target
+      - tanya speed
+      - tanya urutan tools apa aja mau dijalankan:
+        1=subfinder   (-> subs.txt)
+        2=httpx       (subs.txt -> httpx.txt, -mc 200)
+        3=nuclei      (httpx.txt -> nuclei.txt)
+        4=gau         (-> gau.txt)
+        5=xray        (httpx.txt -> xray.json via --url-file)
+    semua step nyimpen temp di bbp/<target>/*.txt
+    hasil akhir = output tool terakhir.
+    kita save copy-nya jadi ~/bug-hunting/custom/<target>/custom.json
+    """
+    custom_banner()
 
-# ===== main loop =====
-def main():
-    while True:
-        os.system("clear")
-        banner()
-        menu()
-        choice = ask("pilih menu", default="9")
+    target = ask("Target root (example.com)")
+    speed  = ask("Threads/speed (default 50)", default="50")
+    order  = ask("Input tool order (comma). 1=subfinder,2=httpx,3=nuclei,4=gau,5=xray",
+                 default="1,2,3")
 
-        if choice == "0":
-            run_fullpower()
-        elif choice == "1":
-            run_subfinder()
-        elif choice == "2":
-            run_httpx()
-        elif choice == "3":
-            run_gau()
-        elif choice == "4":
-            run_nuclei()
-        elif choice == "5":
-            run_hakrawler()
-        elif choice == "6":
-            run_ffuf()
-        elif choice == "7":
-            run_gf()
-        elif choice == "8":
-            run_dalfox()
-        elif choice == "9":
-            print(Fore.YELLOW + "bye hacker. stay legal. ✌")
-            break
-        elif choice == "10":
-            run_attack_focus()
-        else:
-            print(Fore.RED + "invalid choice.")
+    tclean   = sanitize_target_for_dir(target)
+    temp_dir = os.path.join(BBP_BASE, tclean)
+    ensure_dir(temp_dir)
 
-        input(Fore.CYAN + "\n[press ENTER to continue]")
+    final_dir = os.path.join(CUSTOM_BASE, tclean)
+    ensure_dir(final_dir)
 
-if __name__ == "__main__":
-    main()
+    subs_file    = os.path.join(temp_dir, "subs.txt")
+    httpx_file   = os.path.join(temp_dir, "httpx.txt")
+    nuclei_file  = os.path.join(
