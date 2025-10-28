@@ -17,15 +17,14 @@
 ## instalasi tools  (local)
 
 
-
+# sudo su terlebih dahulu
 ```bash
-
-# 1) superuser
-sudo su
 
 # 2) Clone repo & jalankan setup
 git clone https://github.com/fajar23332/Bug-Hunting.git
+
 cd Bug-Hunting
+
 chmod +x setup.sh hunt.py
 
 # 3) Jalankan setup (install dependencies, clone SecLists subset, copy wordlists, dll.)
