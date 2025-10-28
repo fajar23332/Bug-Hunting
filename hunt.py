@@ -384,61 +384,63 @@ def run_attack_focus():
 
     tclean = sanitize_target_for_dir(target)
 
-    # temp dir for work
+    # temp dir for work (bbp/<target>)
     temp_dir = os.path.join(BBP_BASE, tclean)
     ensure_dir(temp_dir)
 
-    # final dir for this bugtype
+    # final dir for this bugtype (~/bug-hunting/<bugtype>/<target>/)
     final_dir = os.path.join(ATTACK_BASE, bug_type, tclean)
     ensure_dir(final_dir)
 
-    gau_raw = os.path.join(temp_dir, "gau_raw.txt")
-    alive_file = os.path.join(temp_dir, "alive.txt")
-    focus_file = os.path.join(temp_dir, "focus.txt")
-    result_file = os.path.join(final_dir, "result.json")
+    gau_raw        = os.path.join(temp_dir, "gau_raw.txt")         # full crawl
+    focus_raw      = os.path.join(temp_dir, "focus_raw.txt")       # filtered by gf
+    focus_alive    = os.path.join(temp_dir, "focus_alive.txt")     # only live 200
+    result_file    = os.path.join(final_dir, "result.json")        # final report
 
     print(Fore.MAGENTA + "\n[ ATTACK FOCUS MODE ]")
     print(Fore.MAGENTA + f"Target   : {target}")
     print(Fore.MAGENTA + f"Bug type : {bug_type}")
     print(Fore.MAGENTA + f"Temp dir : {temp_dir}")
     print(Fore.MAGENTA + f"Final    : {result_file}")
-    print(Fore.YELLOW  + "\nChain: gau -> httpx -> gf(filter) -> tool exploit\n")
+    print(Fore.YELLOW  + "\nChain: gau -> gf(filter by vuln type) -> httpx (live only) -> exploit tool\n")
 
-    # Step A: gau
+    # STEP 1: GAU (collect archive URLs / params)
     shell_gau = f"gau --subs {target} | tee {gau_raw}"
     print(Fore.CYAN + "\n[1] gau -> gau_raw.txt")
     run_cmd(shell_gau, shell=True)
 
-    # Step B: httpx (filter live 200)
+    # STEP 2: GF FILTER (pick only interesting URLs for chosen vuln type)
+    # we'll map bug_type (xss/sqli/lfi) directly to gf pattern with same name
+    gf_pattern = bug_type  # expects gf xss / gf sqli / gf lfi to exist in ~/.gf
+    shell_gf = f"cat {gau_raw} | gf {gf_pattern} | tee {focus_raw}"
+    print(Fore.CYAN + "\n[2] gf -> focus_raw.txt")
+    run_cmd(shell_gf, shell=True)
+
+    # STEP 3: HTTPX (only test filtered URLs, check which are actually alive 200)
     cmd_httpx = [
         "httpx",
-        "-l", gau_raw,
+        "-l", focus_raw,
         "-mc", "200",
         "-t", speed,
         "-silent",
-        "-o", alive_file
+        "-o", focus_alive
     ]
-    print(Fore.CYAN + "\n[2] httpx -> alive.txt")
+    print(Fore.CYAN + "\n[3] httpx (200 only) -> focus_alive.txt")
     run_cmd(cmd_httpx)
 
-    # Step C: gf filter based on bug_type
-    gf_pattern = bug_type  # we assume gf xss / gf sqli / gf lfi exists
-    shell_gf = f"cat {alive_file} | gf {gf_pattern} | tee {focus_file}"
-    print(Fore.CYAN + "\n[3] gf filter -> focus.txt")
-    run_cmd(shell_gf, shell=True)
-
-    # Step D: run exploit tool depending on bug_type
+    # STEP 4: EXPLOIT TOOL
     print(Fore.CYAN + "\n[4] exploitation -> result.json")
 
     if bug_type == "xss":
-        # dalfox file <focus_file>
+        # dalfox against list
         payload_file = os.path.join(WL_BASE, "xss-payloadbox.txt")
         if not os.path.isfile(payload_file):
-            payload_file = payload_file  # will still pass, user can fix manually
+            # fallback: still pass this path, user can adjust later
+            payload_file = payload_file
 
-        # using skip-mining-all by default (safer/quicker)
+        # default: skip mining biar gak barbar
         shell_dalfox = (
-            f"dalfox file {focus_file} "
+            f"dalfox file {focus_alive} "
             f"--custom-payload {payload_file} "
             f"--worker {speed} "
             f"--skip-mining-all "
@@ -447,31 +449,29 @@ def run_attack_focus():
         run_cmd(shell_dalfox, shell=True)
 
     elif bug_type == "sqli":
-        # loop sqlmap on each URL in focus_file and tee to result_file
-        # We run safe mode (no dump)
-        # This builds a mini shell script pipeline
+        # loop sqlmap safe mode for each URL in focus_alive
+        # we keep batch / risk=1 / level=1 / smart to stay 'legal-ish'
         shell_sqlmap = (
             "while read -r url; do "
             "echo '[*] Testing SQLi:' \"$url\"; "
             "sqlmap -u \"$url\" --batch --level=1 --risk=1 --random-agent --smart --flush-session; "
-            "done < " + focus_file + " | tee " + result_file
+            "done < " + focus_alive + " | tee " + result_file
         )
         run_cmd(shell_sqlmap, shell=True)
 
     elif bug_type == "lfi":
-        # nuclei against focus_file
-        cmd_nuclei = (
-            f"nuclei -l {focus_file} -c {speed} -o {result_file}"
+        # nuclei scan potential LFI-style URLs only
+        shell_nuclei = (
+            f"nuclei -l {focus_alive} -c {speed} -o {result_file}"
         )
-        run_cmd(cmd_nuclei, shell=True)
+        run_cmd(shell_nuclei, shell=True)
 
     else:
-        print(Fore.RED + f"[!] Unknown bug_type '{bug_type}'. No exploit tool run.")
-        print(Fore.RED + "    (Supported: xss / sqli / lfi)")
-        # even if bug type invalid, we won't delete temp, so user can inspect.
+        print(Fore.RED + f"[!] Unknown bug_type '{bug_type}'. Supported: xss / sqli / lfi")
+        print(Fore.RED + "    Skipping exploit step.")
 
-    # Step E: cleanup temps
-    for f in [gau_raw, alive_file, focus_file]:
+    # STEP 5: CLEANUP TEMP FILES
+    for f in [gau_raw, focus_raw, focus_alive]:
         if os.path.isfile(f):
             try:
                 os.remove(f)
@@ -481,7 +481,7 @@ def run_attack_focus():
 
     print(Fore.GREEN + "\n[✓] Attack focus finished.")
     print(Fore.GREEN + f"    Final report -> {result_file}\n")
-
+    
 # ===== main loop =====
 def main():
     while True:
