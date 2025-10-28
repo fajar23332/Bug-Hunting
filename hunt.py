@@ -123,7 +123,6 @@ def run_subfinder_interactive():
     run_cmd(cmd)
 
 def run_httpx_interactive():
-    # user picks which target folder (bbp/<target>/subs.txt)
     target_name = ask("Target name (folder under bbp/, e.g. example.com)")
     tclean   = sanitize_target_for_dir(target_name)
     temp_dir = os.path.join(BBP_BASE, tclean)
@@ -279,7 +278,7 @@ def run_gf_interactive():
     list_path = ask("Path to list of URLs/params (ex: ~/bug-hunting/bbp/target/gau.txt)")
     pattern   = ask("gf pattern (xss,sqli,lfi,redirect,ssti,...)", default="xss")
 
-    # try to infer target dir name from list_path parent
+    # try to infer target dir name
     tguess   = os.path.basename(os.path.dirname(list_path))
     tclean   = sanitize_target_for_dir(tguess)
     temp_dir = os.path.join(BBP_BASE, tclean)
@@ -335,18 +334,13 @@ def run_xray_interactive():
     """
     mode    = ask("Scan mode? (single/list)", default="single").lower()
     plugins = ask("Plugins list (comma, blank=all)", default="")
-    # examples from doc:
-    #   cmd-injection,sqldet  etc
-    # ref: xray webscan --plugins cmd-injection,sqldet --url http://example.com
-    # source: sysin.org article on xray usage. 0
 
     if mode == "single":
         url = ask("Target URL (https://target.com)")
         tclean = sanitize_target_for_dir(url)
     else:
-        # list mode
-        url_file_choice = ask("Use bbp/<target>/httpx.txt ? (y/n)", default="y").lower()
-        if url_file_choice.startswith("y"):
+        use_bbp = ask("Use bbp/<target>/httpx.txt ? (y/n)", default="y").lower()
+        if use_bbp.startswith("y"):
             base_target = ask("Target name in bbp (e.g. example.com)")
             tclean = sanitize_target_for_dir(base_target)
             httpx_file = os.path.join(BBP_BASE, tclean, "httpx.txt")
@@ -364,7 +358,6 @@ def run_xray_interactive():
 
     out_json = os.path.join(final_dir, "xray.json")
 
-    # build cmd
     if mode == "single":
         base_cmd = f"xray webscan --url \"{url}\""
     else:
@@ -385,7 +378,6 @@ def run_xray_interactive():
 def run_fullpower_auto():
     fullpower_banner()
 
-    # ask target + global speed
     target = ask("Target root (example.com, no https://)")
     speed  = ask("Threads (-t / -c for all tools)", default="50")
 
@@ -482,7 +474,7 @@ def run_attack_focus_auto():
     run_cmd(shell_gau, shell=True)
 
     # 2) gf filter
-    gf_pattern = bug_type  # expects ~/.gf/xss.json / sqli.json / lfi.json dll
+    gf_pattern = bug_type  # expects ~/.gf/xss.json / sqli.json / lfi.json
     shell_gf   = f"cat {gau_raw} | gf {gf_pattern} | tee {focus_raw}"
     print(Fore.CYAN + "\n[2] gf -> focus_raw.txt")
     run_cmd(shell_gf, shell=True)
@@ -545,33 +537,249 @@ def run_attack_focus_auto():
 
 def run_custom_chain_auto():
     """
-    Ini mode freestyle buat lo:
+    Mode freestyle:
       - tanya target
       - tanya speed
       - tanya urutan tools apa aja mau dijalankan:
         1=subfinder   (-> subs.txt)
         2=httpx       (subs.txt -> httpx.txt, -mc 200)
-        3=nuclei      (httpx.txt -> nuclei.txt)
+        3=nuclei      (httpx.txt -> nuclei_custom.txt)
         4=gau         (-> gau.txt)
-        5=xray        (httpx.txt -> xray.json via --url-file)
+        5=xray        (httpx.txt -> xray_custom.json via --url-file)
+
     semua step nyimpen temp di bbp/<target>/*.txt
-    hasil akhir = output tool terakhir.
-    kita save copy-nya jadi ~/bug-hunting/custom/<target>/custom.json
+    hasil akhir = artifact step terakhir.
+    kita copy jadi ~/bug-hunting/custom/<target>/custom.json
     """
     custom_banner()
 
     target = ask("Target root (example.com)")
     speed  = ask("Threads/speed (default 50)", default="50")
-    order  = ask("Input tool order (comma). 1=subfinder,2=httpx,3=nuclei,4=gau,5=xray",
-                 default="1,2,3")
+    order  = ask(
+        "Input tool order (comma). 1=subfinder,2=httpx,3=nuclei,4=gau,5=xray",
+        default="1,2,3"
+    )
 
-    tclean   = sanitize_target_for_dir(target)
-    temp_dir = os.path.join(BBP_BASE, tclean)
+    tclean    = sanitize_target_for_dir(target)
+    temp_dir  = os.path.join(BBP_BASE, tclean)
     ensure_dir(temp_dir)
 
     final_dir = os.path.join(CUSTOM_BASE, tclean)
     ensure_dir(final_dir)
 
-    subs_file    = os.path.join(temp_dir, "subs.txt")
-    httpx_file   = os.path.join(temp_dir, "httpx.txt")
-    nuclei_file  = os.path.join(
+    subs_file   = os.path.join(temp_dir, "subs.txt")
+    httpx_file  = os.path.join(temp_dir, "httpx.txt")
+    nuclei_file = os.path.join(temp_dir, "nuclei_custom.txt")
+    gau_file    = os.path.join(temp_dir, "gau.txt")
+    xray_json   = os.path.join(temp_dir, "xray_custom.json")
+    final_json  = os.path.join(final_dir, "custom.json")
+
+    steps = [s.strip() for s in order.split(",") if s.strip() != ""]
+    last_artifact = None  # path to final artifact from last executed tool
+
+    for step in steps:
+        if step == "1":
+            # subfinder
+            cmd_subfinder = [
+                "subfinder",
+                "-d", target,
+                "-t", speed,
+                "-silent",
+                "-o", subs_file
+            ]
+            print(Fore.CYAN + "\n[custom] subfinder -> subs.txt")
+            run_cmd(cmd_subfinder)
+            last_artifact = subs_file
+
+        elif step == "2":
+            # httpx from subs
+            src_list = subs_file
+            if not os.path.isfile(src_list):
+                print(Fore.RED + f"[!] {src_list} missing. custom httpx needs subs.txt first.")
+                src_list = ask("Custom path for httpx -l")
+            cmd_httpx = [
+                "httpx",
+                "-l", src_list,
+                "-mc", "200",
+                "-t", speed,
+                "-silent",
+                "-o", httpx_file
+            ]
+            print(Fore.CYAN + "\n[custom] httpx -> httpx.txt")
+            run_cmd(cmd_httpx)
+            last_artifact = httpx_file
+
+        elif step == "3":
+            # nuclei list mode from httpx
+            src_list = httpx_file
+            if not os.path.isfile(src_list):
+                print(Fore.RED + f"[!] {src_list} missing. custom nuclei needs httpx.txt first.")
+                src_list = ask("Custom path for nuclei -l")
+            cmd_nuclei = [
+                "nuclei",
+                "-l", src_list,
+                "-c", speed,
+                "-o", nuclei_file
+            ]
+            print(Fore.CYAN + "\n[custom] nuclei -> nuclei_custom.txt")
+            run_cmd(cmd_nuclei)
+            last_artifact = nuclei_file
+
+        elif step == "4":
+            # gau dump
+            shell_gau = f"gau --subs {target} | tee {gau_file}"
+            print(Fore.CYAN + "\n[custom] gau -> gau.txt")
+            run_cmd(shell_gau, shell=True)
+            last_artifact = gau_file
+
+        elif step == "5":
+            # xray with httpx.txt as url-file default
+            src_list = httpx_file
+            if not os.path.isfile(src_list):
+                print(Fore.RED + f"[!] {src_list} missing. xray default uses httpx.txt alive hosts.")
+                src_list = ask("Custom path for xray --url-file")
+
+            plugins = ask("xray plugins (comma) blank=all", default="")
+
+            base_cmd = f"xray webscan --url-file \"{src_list}\""
+            if plugins != "":
+                base_cmd += f" --plugins {plugins}"
+            base_cmd += f" --json-output \"{xray_json}\""
+
+            print(Fore.CYAN + "\n[custom] xray -> xray_custom.json")
+            run_cmd(base_cmd, shell=True)
+            last_artifact = xray_json
+
+        else:
+            print(Fore.RED + f"[!] step '{step}' gak dikenal, skip.")
+
+    # save/copy final artifact jadi custom.json
+    if last_artifact and os.path.isfile(last_artifact):
+        try:
+            shutil.copyfile(last_artifact, final_json)
+            print(Fore.GREEN + f"\n[+] Saved final chain result -> {final_json}")
+        except Exception as e:
+            print(Fore.RED + f"[!] Failed to copy final artifact: {e}")
+    else:
+        print(Fore.RED + "\n[!] No final artifact produced, custom.json not written")
+
+    # optional cleanup block:
+    # for f in [subs_file, httpx_file, nuclei_file, gau_file, xray_json]:
+    #     if os.path.isfile(f):
+    #         try:
+    #             os.remove(f)
+    #             print(Fore.YELLOW + f"[cleanup] removed {f}")
+    #         except:
+    #             print(Fore.RED + f"[!] failed to remove {f}")
+
+    print(Fore.GREEN + "\n[✓] Custom chain done.\n")
+
+# =====================================================================
+# MENUS
+# =====================================================================
+
+def menu_main():
+    big_banner()
+    print(Fore.CYAN + "[1] Recon & Enum tools")
+    print(Fore.CYAN + "[2] Full Power (auto recon end-to-end)")
+    print(Fore.CYAN + "[3] Attack Focus (xss / sqli / lfi chain)")
+    print(Fore.CYAN + "[4] Xray Scan")
+    print(Fore.CYAN + "[5] Custom Chain (you pick steps)")
+    print(Fore.CYAN + "[0] Exit\n")
+
+def menu_recon():
+    recon_banner()
+    print(Fore.CYAN + "[1] subfinder")
+    print(Fore.CYAN + "[2] httpx")
+    print(Fore.CYAN + "[3] gau")
+    print(Fore.CYAN + "[4] nuclei")
+    print(Fore.CYAN + "[5] hakrawler")
+    print(Fore.CYAN + "[6] ffuf")
+    print(Fore.CYAN + "[7] gf")
+    print(Fore.CYAN + "[8] dalfox")
+    print(Fore.CYAN + "[9] Back to main\n")
+
+def menu_xray():
+    xray_banner()
+    print(Fore.CYAN + "[1] Run xray scan (single URL / list file)")
+    print(Fore.CYAN + "[9] Back to main\n")
+
+def main():
+    while True:
+        os.system("clear")
+        menu_main()
+        choice = ask("pilih menu", default="0")
+
+        if choice == "0":
+            print(Fore.YELLOW + "bye hacker. stay legal. ✌")
+            break
+
+        elif choice == "1":
+            # recon submenu
+            while True:
+                os.system("clear")
+                menu_recon()
+                rc = ask("recon menu", default="9")
+
+                if rc == "1":
+                    run_subfinder_interactive()
+                elif rc == "2":
+                    run_httpx_interactive()
+                elif rc == "3":
+                    run_gau_interactive()
+                elif rc == "4":
+                    run_nuclei_interactive()
+                elif rc == "5":
+                    run_hakrawler_interactive()
+                elif rc == "6":
+                    run_ffuf_interactive()
+                elif rc == "7":
+                    run_gf_interactive()
+                elif rc == "8":
+                    run_dalfox_interactive()
+                elif rc == "9":
+                    break
+                else:
+                    print(Fore.RED + "invalid choice.")
+                input(Fore.CYAN + "\n[press ENTER to continue]")
+
+        elif choice == "2":
+            # full power auto mode
+            os.system("clear")
+            run_fullpower_auto()
+            input(Fore.CYAN + "\n[press ENTER to continue]")
+
+        elif choice == "3":
+            # attack focus auto mode
+            os.system("clear")
+            run_attack_focus_auto()
+            input(Fore.CYAN + "\n[press ENTER to continue]")
+
+        elif choice == "4":
+            # xray submenu
+            while True:
+                os.system("clear")
+                menu_xray()
+                xc = ask("xray menu", default="9")
+                if xc == "1":
+                    run_xray_interactive()
+                    input(Fore.CYAN + "\n[press ENTER to continue]")
+                elif xc == "9":
+                    break
+                else:
+                    print(Fore.RED + "invalid choice.")
+                    input(Fore.CYAN + "\n[press ENTER to continue]")
+
+        elif choice == "5":
+            # custom chain mode
+            os.system("clear")
+            run_custom_chain_auto()
+            input(Fore.CYAN + "\n[press ENTER to continue]")
+
+        else:
+            print(Fore.RED + "invalid choice.")
+            input(Fore.CYAN + "\n[press ENTER to continue]")
+
+
+if __name__ == "__main__":
+    main()
