@@ -14,9 +14,10 @@ GOPATH="${GOPATH:-$HOME/go}"
 PATH_ADD_LINE='export PATH="$HOME/go/bin:$HOME/.local/bin:$PATH"'
 
 # --------- Update & essentials ----------
-echo "[1/8] apt update & install basics (git, curl, build tools, python, go)"
+echo "[1/8] apt update & install basics (git, curl, build tools, python)"
 sudo apt update -y
-sudo apt install -y git curl wget ca-certificates build-essential python3 python3-pip golang-go
+sudo apt install -y git curl wget ca-certificates build-essential python3 python3-pip
+
 
 # Ensure GOBIN/GOPATH exist and present in PATH for this run
 mkdir -p "$GOBIN"
