@@ -1,579 +1,522 @@
 #!/usr/bin/env python3
-# hunt.py - Interactive Bug Hunting CLI (single file)
-# Author: generated for Dolvin (adapt & use responsibly)
-# Requirements: Python 3.8+. External tools must be installed and in PATH.
-
 import os
-import sys
-import shutil
 import subprocess
-import time
+import shutil
 from datetime import datetime
-from pathlib import Path
+from colorama import Fore, Style, init as colorama_init
+from pyfiglet import figlet_format
+from termcolor import colored
 
-# -------------------- Styling --------------------
-class S:
-    B = "\033[1m"
-    U = "\033[4m"
-    R = "\033[31m"
-    G = "\033[32m"
-    Y = "\033[33m"
-    C = "\033[36m"
-    M = "\033[35m"
-    RESET = "\033[0m"
+# ===== init color =====
+colorama_init(autoreset=True)
 
-def c(text, color=S.C):
-    return f"{color}{text}{S.RESET}"
+# ===== base paths =====
+HOME = os.path.expanduser("~")
 
+BBP_BASE = os.path.join(HOME, "bug-hunting", "bbp")  # temp / recon workspace
+FULLPOWER_BASE = os.path.join(HOME, "bug-hunting", "fullpower")  # final reports fullpower
+ATTACK_BASE = os.path.join(HOME, "bug-hunting")  # we'll create bugtype dirs here
+WL_BASE = os.path.join(HOME, "Bug-Hunting", "wordlist")  # wordlists from setup.sh
+
+os.makedirs(BBP_BASE, exist_ok=True)
+os.makedirs(FULLPOWER_BASE, exist_ok=True)
+
+# ===== helpers =====
 def banner():
-    print(S.M + r"""
-  ____             _   _                 _   _           _   _  __
- |  _ \  ___   ___| |_| |__   ___  _ __ | |_| |__   ___ | |_(_)/ _| ___
- | | | |/ _ \ / __| __| '_ \ / _ \| '_ \| __| '_ \ / _ \| __| | |_ / _ \
- | |_| | (_) | (__| |_| | | | (_) | | | | |_| | | | (_) | |_| |  _|  __/
- |____/ \___/ \___|\__|_| |_|\___/|_| |_|\__|_| |_|\___/ \__|_|_|  \___|
-"""+S.RESET)
-    print(S.B + "  🕵️  Hunt Toolkit — interactive CLI (outputs -> ~/bug-hunting/bbp/<target>/)\n" + S.RESET)
+    title = figlet_format("HUNT", font="slant")
+    print(colored(title, "cyan"))
+    print(Fore.MAGENTA + "    Bug Bounty Recon Console")
+    print(Fore.MAGENTA + "    use with permission only 🚨\n")
+    print(Fore.YELLOW + "Temp dir     : ~/bug-hunting/bbp/<target>/")
+    print(Fore.YELLOW + "FullPower dir: ~/bug-hunting/fullpower/<target>/fullpower.json")
+    print(Fore.YELLOW + "Attack dir   : ~/bug-hunting/<bugtype>/<target>/result.json\n")
 
-# -------------------- Paths & utils --------------------
-HOME = str(Path.home())
-OUTPUT_ROOT = os.path.join(HOME, "bug-hunting", "bbp")
-WORDLIST_ROOT = os.path.join(HOME, "Bug-Hunting", "wordlist")
-
-def expand(p): return os.path.abspath(os.path.expanduser(p)) if p else p
-def ensure_dir(p): os.makedirs(expand(p), exist_ok=True); return expand(p)
-def now_ts(): return datetime.now().strftime("%Y%m%dT%H%M%S")
-def backup_if_exists(path):
-    path = expand(path)
-    if os.path.exists(path):
-        bak = f"{path}.bak-{now_ts()}"
-        shutil.move(path, bak)
-        return bak
-    return None
-def which(binname): return shutil.which(binname)
-
-def run_list(cmd, cwd=None):
-    # cmd: list
-    print(c("[RUN] " + " ".join(cmd), S.Y))
-    t0 = time.time()
-    try:
-        proc = subprocess.run(cmd, cwd=cwd)
-        rc = proc.returncode
-    except FileNotFoundError as e:
-        print(c(f"[ERR] command not found: {e}", S.R))
-        return 127
-    elapsed = time.time() - t0
-    print(c(f"[DONE] Exit={rc} ({elapsed:.1f}s)\n", S.G))
-    return rc
-
-def run_shell(cmd, cwd=None):
-    print(c("[RUN-SH] " + cmd, S.Y))
-    t0 = time.time()
-    try:
-        proc = subprocess.run(cmd, shell=True, cwd=cwd)
-        rc = proc.returncode
-    except FileNotFoundError as e:
-        print(c(f"[ERR] shell error: {e}", S.R))
-        return 127
-    elapsed = time.time() - t0
-    print(c(f"[DONE] Exit={rc} ({elapsed:.1f}s)\n", S.G))
-    return rc
+def menu():
+    print(Fore.CYAN + "[0] FULL POWER (subfinder -> httpx -> nuclei)")
+    print(Fore.CYAN + "[1] subfinder")
+    print(Fore.CYAN + "[2] httpx")
+    print(Fore.CYAN + "[3] gau")
+    print(Fore.CYAN + "[4] nuclei")
+    print(Fore.CYAN + "[5] hakrawler")
+    print(Fore.CYAN + "[6] ffuf")
+    print(Fore.CYAN + "[7] gf")
+    print(Fore.CYAN + "[8] dalfox")
+    print(Fore.CYAN + "[9] exit")
+    print(Fore.CYAN + "[10] ATTACK FOCUS (xss / sqli / lfi chain)\n")
 
 def ask(prompt, default=None):
     if default is not None:
-        r = input(c(f"{prompt} ", S.C) + f"[{default}] ")
-        return r.strip() or default
+        val = input(Fore.GREEN + f"{prompt} [{default}]: ").strip()
+        if val == "":
+            return default
+        return val
     else:
-        return input(c(f"{prompt} ", S.C)).strip()
+        return input(Fore.GREEN + f"{prompt}: ").strip()
 
-def confirm(prompt, default=True):
-    d = "Y/n" if default else "y/N"
-    r = input(c(f"{prompt} ({d}) ", S.C)).strip().lower()
-    if r == "":
-        return default
-    return r[0] == "y"
+def sanitize_target_for_dir(s):
+    s = s.strip()
+    s = s.replace("http://", "")
+    s = s.replace("https://", "")
+    s = s.replace("/", "_")
+    return s
 
-def infer_target_from_path(path):
-    path = expand(path)
-    parts = Path(path).parts
-    # find first element that looks like domain (contains dot)
-    for p in reversed(parts):
-        if "." in p and len(p) > 3:
-            return p
-    return None
+def ensure_dir(path):
+    os.makedirs(path, exist_ok=True)
 
-# -------------------- Menus: tool wrappers --------------------
+def run_cmd(cmd, cwd=None, shell=False):
+    """Run command and stream output."""
+    if shell:
+        preview = cmd
+    else:
+        preview = " ".join(cmd)
 
-def subfinder_menu():
-    print(S.B + "\n== Subfinder (subdomain enumeration) ==" + S.RESET)
-    target = ask("Masukkan target domain (contoh example.com)")
-    if not target:
-        print("Cancel")
-        return
-    target = target.replace("http://", "").replace("https://", "").strip("/ ")
-    outdir = ensure_dir(os.path.join(OUTPUT_ROOT, target))
-    outfile = os.path.join(outdir, "subs.txt")
-    threads = ask("Threads", "50")
-    if not which("subfinder"):
-        print(c("subfinder not found in PATH. Install via `go install ...` or setup.sh", S.R)); return
-    cmd = ["subfinder", "-d", target, "-all", "-t", str(threads), "-o", outfile]
-    print(c("Preview: " + " ".join(cmd), S.Y))
-    if confirm("Jalankan sekarang?", True):
-        backup_if_exists(outfile)
-        run_list(cmd)
-        if os.path.exists(outfile):
-            n = sum(1 for _ in open(outfile, "r", errors="ignore"))
-            print(c(f"[OK] Saved -> {outfile} ({n} lines)", S.G))
-
-def httpx_menu():
-    print(S.B + "\n== HTTPX (probe live hosts) ==" + S.RESET)
-    inp = ask("Masukkan path list subdomain (mis. ~/bug-hunting/bbp/example.com/subs.txt)")
-    inp = expand(inp)
-    if not os.path.exists(inp):
-        print(c("File not found.", S.R)); return
-
-    # infer target name from the parent folder (not from file name)
-    parent_dir = os.path.dirname(inp)             # e.g. /root/bug-hunting/bbp/contentsquare.com
-    target = os.path.basename(parent_dir)         # e.g. contentsquare.com
-    if not target or target == "" or target == ".":
-        # fallback: try to infer from filename
-        target = infer_target_from_path(inp) or Path(inp).stem
-
-    outdir = ensure_dir(os.path.join(OUTPUT_ROOT, target))   # ~/bug-hunting/bbp/<target>/
-    outfile = os.path.join(outdir, "httpx.txt")              # ~/.../<target>/httpx.txt
-
-    threads = ask("Threads", "50")
-    mc = ask("Match codes -mc (contoh: 200,301,302)", "200")
-    silent = confirm("Gunakan -silent? (recommended)", True)
-
-    if not which("httpx"):
-        print(c("httpx not found in PATH.", S.R)); return
-
-    # build command as list for clarity
-    cmd = ["httpx", "-l", inp, "-mc", mc, "-t", str(threads), "-o", outfile]
-    if silent:
-        # httpx flag is '-silent' (a positional flag), include it
-        cmd.insert(-2, "-silent")  # put before '-o' arg
-
-    print(c("Preview: " + " ".join(cmd), S.Y))
-    if confirm("Jalankan sekarang?", True):
-        backup_if_exists(outfile)
-        run_list(cmd)
-        if os.path.exists(outfile):
-            n = sum(1 for _ in open(outfile, "r", errors="ignore"))
-            print(c(f"[OK] Saved -> {outfile} ({n} lines)", S.G))
-            
-def gau_menu():
-    print(S.B + "\n== GAU (getallurls) ==" + S.RESET)
-    target = ask("Masukkan target domain (contoh example.com)")
-    if not target:
-        return
-    target = target.replace("http://","").replace("https://","").strip("/ ")
-    outdir = ensure_dir(os.path.join(OUTPUT_ROOT, target))
-    outfile = os.path.join(outdir, "gau.txt")
-    threads = ask("Threads", "50")
-    blacklist = ask("Blacklist ekstensi (contoh .png,.jpg) (enter=none)", "")
-    if not which("gau"):
-        print(c("gau not found in PATH.", S.R)); return
-    # build shell command
-    cmd = f"gau --threads {threads} "
-    if blacklist:
-        # double-quote blacklist to be safe
-        cmd += f"--blacklist \"{blacklist}\" "
-    cmd += f"{target} > \"{outfile}\""
-    print(c("Preview: " + cmd, S.Y))
-    if confirm("Jalankan sekarang?", True):
-        backup_if_exists(outfile)
-        run_shell(cmd)
-        if os.path.exists(outfile):
-            n = sum(1 for _ in open(outfile, "r", errors="ignore"))
-            print(c(f"[OK] Saved -> {outfile} ({n} lines)", S.G))
-
-def wayback_menu():
-    print(S.B + "\n== waybackurls ==" + S.RESET)
-    target = ask("Masukkan target domain (contoh example.com)")
-    if not target: return
-    target = target.replace("http://","").replace("https://","").strip("/ ")
-    outdir = ensure_dir(os.path.join(OUTPUT_ROOT, target))
-    outfile = os.path.join(outdir, "waybackurls.txt")
-    if not which("waybackurls"):
-        print(c("waybackurls not found in PATH.", S.R)); return
-    cmd = f"echo {target} | waybackurls > \"{outfile}\""
-    print(c("Preview: " + cmd, S.Y))
-    if confirm("Jalankan sekarang?", True):
-        backup_if_exists(outfile)
-        run_shell(cmd)
-        if os.path.exists(outfile):
-            n = sum(1 for _ in open(outfile, "r", errors="ignore"))
-            print(c(f"[OK] Saved -> {outfile} ({n} lines)", S.G))
-
-def hakrawler_menu():
-    print(S.B + "\n== Hakrawler (endpoint crawler) ==" + S.RESET)
-    target = ask("Masukkan target URL (contoh https://example.com)")
-    if not target:
-        return
-
-    # auto tambahkan https:// kalau belum ada
-    if not target.startswith("http://") and not target.startswith("https://"):
-        target = "https://" + target
-
-    outdir = ensure_dir(os.path.join(OUTPUT_ROOT, infer_target_from_path(target) or Path(target).name))
-    outfile = os.path.join(outdir, "hakrawler.txt")
-
-    # opsi tambahan
-    depth = ask("Depth (-d) [default 2]", "2")
-    include_subs = confirm("Gunakan opsi -subs (ikut subdomain)?", False)
-    threads = ask("Threads (default 10)", "10")
-
-    if not which("hakrawler"):
-        print(c("hakrawler not found in PATH. Install via 'go install github.com/hakluke/hakrawler@latest'", S.R))
-        return
-
-    # susun perintah
-    cmd = f"echo {target} | hakrawler -d {depth} -t {threads}"
-    if include_subs:
-        cmd += " -subs"
-    cmd += f" > \"{outfile}\""
-
-    print(c("Preview: " + cmd, S.Y))
-
-    if confirm("Jalankan sekarang?", True):
-        backup_if_exists(outfile)
-        run_shell(cmd)
-        if os.path.exists(outfile):
-            n = sum(1 for _ in open(outfile, "r", errors="ignore"))
-            print(c(f"[OK] Saved -> {outfile} ({n} URLs ditemukan)", S.G))
+    print(Fore.YELLOW + "\n[CMD] " + preview)
+    print(Fore.YELLOW + "--------------------------------------------------\n")
+    try:
+        if shell:
+            subprocess.run(cmd, shell=True, check=False)
         else:
-            print(c("[!] Tidak ada hasil ditemukan, periksa domain atau opsi -subs", S.Y))
-def assetfinder_menu():
-    print(S.B + "\n== assetfinder ==" + S.RESET)
-    target = ask("Masukkan target domain (contoh example.com)")
-    if not target: return
-    target = target.replace("http://","").replace("https://","").strip("/ ")
-    outdir = ensure_dir(os.path.join(OUTPUT_ROOT, target))
-    outfile = os.path.join(outdir, "assetfinder.txt")
-    if not which("assetfinder"):
-        print(c("assetfinder not found in PATH.", S.R)); return
-    cmd = f"assetfinder {target} | tee \"{outfile}\""
-    print(c("Preview: " + cmd, S.Y))
-    if confirm("Jalankan sekarang?", True):
-        backup_if_exists(outfile)
-        run_shell(cmd)
-        if os.path.exists(outfile):
-            n = sum(1 for _ in open(outfile, "r", errors="ignore"))
-            print(c(f"[OK] Saved -> {outfile} ({n} lines)", S.G))
+            subprocess.run(cmd, check=False)
+    except KeyboardInterrupt:
+        print(Fore.RED + "\n[!] Aborted by user.\n")
+    except Exception as e:
+        print(Fore.RED + f"[!] Error running command: {e}\n")
 
-def combine_endpoints_menu():
-    print(S.B + "\n== Combine endpoints (gau + wayback + hakrawler) ==" + S.RESET)
-    path = ask("Masukkan target/parent folder path (contoh ~/bug-hunting/bbp/example.com) [enter=auto target prompt]", "")
-    if not path:
-        target = ask("Masukkan target domain (example.com)")
-        path = os.path.join(OUTPUT_ROOT, target)
-    path = expand(path)
-    if not os.path.isdir(path):
-        print(c("Folder not found.", S.R)); return
-    out = os.path.join(path, "endpoints.txt")
-    sources = []
-    for name in ("gau.txt", "waybackurls.txt", "hakrawler.txt", "gf_xss.txt", "httpx.txt"):
-        p = os.path.join(path, name)
-        if os.path.exists(p):
-            sources.append(p)
-    if not sources:
-        print(c("No source files found to combine (gau/wayback/hakrawler ...)", S.Y)); return
-    cmd = "cat " + " ".join(f"\"{s}\"" for s in sources) + f" | sort -u > \"{out}\""
-    print(c("Preview: " + cmd, S.Y))
-    if confirm("Jalankan sekarang?", True):
-        backup_if_exists(out)
-        run_shell(cmd)
-        if os.path.exists(out):
-            n = sum(1 for _ in open(out, "r", errors="ignore"))
-            print(c(f"[OK] Saved -> {out} ({n} unique endpoints)", S.G))
+# ===== basic tool runners =====
 
-def gf_menu():
-    print(S.B + "\n== GF pattern filtering ==" + S.RESET)
-    inp = ask("Masukkan path file list (mis ~/bug-hunting/bbp/example.com/gau.txt)")
-    inp = expand(inp)
-    if not os.path.exists(inp):
-        print(c("File not found.", S.R)); return
-    gf_dir = expand("~/.gf")
-    patterns = []
-    if os.path.isdir(gf_dir):
-        patterns = [p.stem for p in Path(gf_dir).glob("*.json")]
-    if patterns:
-        print(c("Available patterns: " + ", ".join(patterns[:30]), S.Y))
-    else:
-        print(c("Warning: ~/.gf patterns not found. You can still type a pattern name (e.g. xss).", S.Y))
-    pattern = ask("Pilih pattern (contoh: xss)")
-    target = infer_target_from_path(inp) or Path(inp).parent.name
-    outdir = ensure_dir(os.path.join(OUTPUT_ROOT, target))
-    out = os.path.join(outdir, f"gf_{pattern}.txt")
-    if not which("gf"):
-        print(c("gf binary not found in PATH.", S.R)); return
-    cmd = f"cat \"{inp}\" | gf {pattern} > \"{out}\""
-    print(c("Preview: " + cmd, S.Y))
-    if confirm("Jalankan sekarang?", True):
-        backup_if_exists(out)
-        run_shell(cmd)
-        if os.path.exists(out):
-            n = sum(1 for _ in open(out, "r", errors="ignore"))
-            print(c(f"[OK] Saved -> {out} ({n} lines)", S.G))
+def run_subfinder():
+    target = ask("Target domain (e.g. example.com)")
+    threads = ask("Threads for subfinder (-t)", default="200")
 
-def nuclei_menu():
-    print(S.B + "\n== Nuclei scanner ==" + S.RESET)
-    mode = ask("Mode: 1) single target  2) list file", "2")
-    if mode.strip() == "1":
-        target = ask("Masukkan target (https://example.com)")
-        if not target: return
-        target = target.strip()
-        input_flag = "-u"
-        input_val = target
-        outdir = ensure_dir(os.path.join(OUTPUT_ROOT, infer_target_from_path(target) or Path(target).name))
-    else:
-        fp = ask("Masukkan path list file (contoh ~/bug-hunting/bbp/example.com/httpx.txt)")
-        fp = expand(fp)
-        if not os.path.exists(fp):
-            print(c("File not found.", S.R)); return
-        input_flag = "-l"
-        input_val = fp
-        outdir = ensure_dir(os.path.join(OUTPUT_ROOT, infer_target_from_path(fp) or Path(fp).parent.name))
+    tclean = sanitize_target_for_dir(target)
+    temp_dir = os.path.join(BBP_BASE, tclean)
+    ensure_dir(temp_dir)
 
-    outfile = os.path.join(outdir, "nuclei_results.txt")
-    severity = ask("Severity (comma separated, enter = ALL severities)", "")
-    concurrency = ask("Concurrency -c (default 50)", "50")
-    update = confirm("Update nuclei-templates before scan? (takes time)", False)
-    if not which("nuclei"):
-        print(c("nuclei not found in PATH.", S.R)); return
-    if update:
-        run_list(["nuclei", "-update-templates"])
+    out_file = os.path.join(temp_dir, "subs.txt")
 
-    # build base cmd (no -json)
-    cmd = ["nuclei", input_flag, input_val, "-c", concurrency, "-o", outfile]
+    cmd = [
+        "subfinder",
+        "-d", target,
+        "-t", threads,
+        "-silent",
+        "-o", out_file,
+    ]
 
-    # only add -severity if user provided a non-empty value
-    if severity.strip():
-        cmd += ["-severity", severity]
+    print(Fore.CYAN + f"\n[+] Output -> {out_file}")
+    run_cmd(cmd)
 
-    print(c("Preview: " + " ".join(cmd), S.Y))
-    if confirm("Jalankan sekarang?", True):
-        backup_if_exists(outfile)
-        run_list(cmd)
-        if os.path.exists(outfile):
-            size = os.path.getsize(outfile)
-            print(c(f"[OK] Saved -> {outfile} (size: {size} bytes)", S.G))
-def ffuf_menu():
-    print(S.B + "\n== FFUF (fuzzing) ==" + S.RESET)
+def run_httpx():
+    target = ask("Target name (folder under bbp/, e.g. example.com)")
+    tclean = sanitize_target_for_dir(target)
+    temp_dir = os.path.join(BBP_BASE, tclean)
+    subs_path = os.path.join(temp_dir, "subs.txt")
 
-    # ensure wordlist dir exists; if not, suggest to run setup
-    wl_root = expand(WORDLIST_ROOT)
-    sec_root = expand(os.path.join(HOME, "Seclists", "SecLists-master"))
-    wl_entries = []
-    if os.path.isdir(wl_root):
-        wl_entries = sorted([p for p in os.listdir(wl_root) if p.endswith(".txt")])
-    else:
-        print(c(f"Wordlist dir {wl_root} tidak ditemukan. Kalau belum, jalankan setup.sh dulu.", S.Y))
+    if not os.path.isfile(subs_path):
+        print(Fore.RED + f"[!] subs.txt not found at {subs_path}")
+        subs_path = ask("Custom path to list for httpx -l")
 
-    # If there are no local wordlists but SecLists is cloned, offer to copy/choose from it
-    sec_entries = []
-    if not wl_entries and os.path.isdir(sec_root):
-        # provide a few sensible defaults (web-content, raft, xss lists)
-        candidates = [
-            "Discovery/Web-Content/raft-large-directories.txt",
-            "Discovery/Web-Content/raft-medium-directories.txt",
-            "Discovery/Web-Content/combined_directories.txt",
-            "Fuzzing/big-list-of-naughty-strings.txt",
-            "Fuzzing/XSS/Polyglots/XSS-Polyglot-Ultimate-0xsobky.txt",
-            "Fuzzing/XSS/human-friendly/XSS-payloadbox.txt"
+    threads = ask("Threads for httpx (-t)", default="100")
+    mc = ask("Match status code (-mc)", default="200")
+
+    out_file = os.path.join(temp_dir, "httpx.txt")
+
+    cmd = [
+        "httpx",
+        "-l", subs_path,
+        "-mc", mc,
+        "-t", threads,
+        "-silent",
+        "-o", out_file,
+    ]
+
+    print(Fore.CYAN + f"\n[+] Output -> {out_file}")
+    run_cmd(cmd)
+
+def run_gau():
+    target = ask("Target domain for gau (e.g. example.com)")
+    tclean = sanitize_target_for_dir(target)
+    temp_dir = os.path.join(BBP_BASE, tclean)
+    ensure_dir(temp_dir)
+
+    out_file = os.path.join(temp_dir, "gau.txt")
+
+    shell_cmd = f"gau --subs {target} | tee {out_file}"
+    print(Fore.CYAN + f"\n[+] Output -> {out_file}")
+    run_cmd(shell_cmd, shell=True)
+
+def run_nuclei():
+    mode = ask("Scan single URL or list? (single/list)", default="list").lower()
+    sev = ask("Severity filter (critical,high,medium,low,info) OR blank for ALL", default="")
+    conc = ask("Concurrency (-c)", default="50")
+
+    if mode == "single":
+        single_url = ask("Single URL (https://target.com)")
+        tclean = sanitize_target_for_dir(single_url)
+        temp_dir = os.path.join(BBP_BASE, tclean)
+        ensure_dir(temp_dir)
+        out_file = os.path.join(temp_dir, "nuclei.txt")
+
+        base_cmd = [
+            "nuclei",
+            "-u", single_url,
+            "-c", conc,
+            "-o", out_file
         ]
-        for cpath in candidates:
-            full = os.path.join(sec_root, cpath)
-            if os.path.exists(full):
-                sec_entries.append(full)
+    else:
+        base = ask("Target name (folder under bbp/, e.g. example.com)")
+        tclean = sanitize_target_for_dir(base)
+        temp_dir = os.path.join(BBP_BASE, tclean)
+        ensure_dir(temp_dir)
+        live_list = os.path.join(temp_dir, "httpx.txt")
+        if not os.path.isfile(live_list):
+            print(Fore.RED + f"[!] {live_list} not found, give custom list path")
+            live_list = ask("Custom path for nuclei -l")
 
-    # target: user provides FULL URL containing FUZZ (we don't auto change it)
-    target_u = ask("Masukkan target FULL (harus mengandung 'FUZZ', contoh: https://example.com/FUZZ)")
-    if not target_u:
-        print(c("Cancelled.", S.Y)); return
-    if "FUZZ" not in target_u:
-        if not confirm("Target tidak mengandung 'FUZZ'. Lanjutkan? (tidak disarankan)", False):
-            return
+        out_file = os.path.join(temp_dir, "nuclei.txt")
 
-    # choose wordlist source
-    print()
-    if wl_entries:
-        print(c("Wordlists lokal (~/Bug-Hunting/wordlist):", S.Y))
-        for i, name in enumerate(wl_entries[:200], 1):
-            print(f"  {i}) {name}")
-        print(f"  {len(wl_entries)+1}) custom path")
-        choose = ask("Pilih nomor wordlist dari daftar atau ketik 'custom' untuk path sendiri", "1")
-        if choose == "custom" or (choose.isdigit() and int(choose) == len(wl_entries)+1):
-            wl = expand(ask("Masukkan path lengkap ke wordlist (.txt)"))
-            if not os.path.exists(wl):
-                print(c("Wordlist custom tidak ditemukan: " + wl, S.R)); return
-        else:
-            # mapped by index
+        base_cmd = [
+            "nuclei",
+            "-l", live_list,
+            "-c", conc,
+            "-o", out_file
+        ]
+
+    if sev != "":
+        base_cmd += ["-severity", sev]
+
+    print(Fore.CYAN + f"\n[+] Output -> {out_file}")
+    run_cmd(base_cmd)
+
+def run_hakrawler():
+    start_url = ask("Start URL (https://target.com)")
+    include_subs = ask("Include subdomains? (y/n)", default="y").lower()
+    depth = ask("Max depth (-d)", default="2")
+
+    tclean = sanitize_target_for_dir(start_url)
+    temp_dir = os.path.join(BBP_BASE, tclean)
+    ensure_dir(temp_dir)
+
+    out_file = os.path.join(temp_dir, "hakrawler.txt")
+
+    base_cmd = f"hakrawler -url {start_url} -d {depth}"
+    if include_subs.startswith("y"):
+        base_cmd += " -subs"
+    base_cmd += f" | tee {out_file}"
+
+    print(Fore.CYAN + f"\n[+] Output -> {out_file}")
+    run_cmd(base_cmd, shell=True)
+
+def run_ffuf():
+    target_url = ask("Target fuzz URL (use FUZZ, ex: https://site.com/FUZZ or ...?q=FUZZ)")
+    tclean = sanitize_target_for_dir(target_url)
+    temp_dir = os.path.join(BBP_BASE, tclean)
+    ensure_dir(temp_dir)
+
+    print(Fore.YELLOW + "\nWordlist mode:")
+    print(Fore.YELLOW + " 1) raft-large-directories.txt")
+    print(Fore.YELLOW + " 2) web-extensions.txt")
+    print(Fore.YELLOW + " 3) api-endpoints.txt")
+    print(Fore.YELLOW + " 4) lfi.txt")
+    print(Fore.YELLOW + " 5) sqli.txt")
+    print(Fore.YELLOW + " 6) xss-payloadbox.txt")
+    print(Fore.YELLOW + " 7) custom path")
+
+    wl_choice = ask("Choose wordlist", default="1")
+
+    wl_map = {
+        "1": os.path.join(WL_BASE, "raft-large-directories.txt"),
+        "2": os.path.join(WL_BASE, "web-extensions.txt"),
+        "3": os.path.join(WL_BASE, "api-endpoints.txt"),
+        "4": os.path.join(WL_BASE, "lfi.txt"),
+        "5": os.path.join(WL_BASE, "sqli.txt"),
+        "6": os.path.join(WL_BASE, "xss-payloadbox.txt"),
+    }
+
+    if wl_choice == "7":
+        wl_path = ask("Custom wordlist path (absolute)")
+    else:
+        wl_path = wl_map.get(wl_choice, wl_map["1"])
+
+    threads = ask("Threads (-t)", default="50")
+    mc = ask("Match status code (-mc)", default="200")
+
+    out_file = os.path.join(temp_dir, "ffuf.txt")
+
+    cmd = [
+        "ffuf",
+        "-u", target_url,
+        "-w", wl_path,
+        "-t", threads,
+        "-mc", mc,
+        "-c",
+        "-v",
+        "-r",
+        "-o", out_file
+    ]
+
+    print(Fore.CYAN + f"\n[+] Output -> {out_file}")
+    run_cmd(cmd)
+
+def run_gf():
+    list_path = ask("Path to list of URLs/params (e.g. ~/bug-hunting/bbp/target/gau.txt)")
+    pattern = ask("gf pattern (xss,sqli,lfi,redirect,ssti,...)", default="xss")
+
+    tclean = sanitize_target_for_dir(os.path.basename(os.path.dirname(list_path)))
+    temp_dir = os.path.join(BBP_BASE, tclean)
+    ensure_dir(temp_dir)
+
+    out_file = os.path.join(temp_dir, f"gf-{pattern}.txt")
+    shell_cmd = f"cat {list_path} | gf {pattern} | tee {out_file}"
+
+    print(Fore.CYAN + f"\n[+] Output -> {out_file}")
+    run_cmd(shell_cmd, shell=True)
+
+def run_dalfox():
+    mode = ask("Scan single URL or file list? (single/list)", default="list").lower()
+    skip_mining = ask("Skip mining? (--skip-mining-all) y/n", default="y").lower()
+    conc = ask("Concurrency (--worker)", default="30")
+
+    payload_file = os.path.join(WL_BASE, "xss-payloadbox.txt")
+    if not os.path.isfile(payload_file):
+        payload_file = ask("Custom payload file for dalfox --custom-payload", default=payload_file)
+
+    if mode == "single":
+        target_url = ask("Target URL for dalfox (ex: https://site.com/vuln.php?x=FUZZ)")
+        tclean = sanitize_target_for_dir(target_url)
+        temp_dir = os.path.join(BBP_BASE, tclean)
+        ensure_dir(temp_dir)
+        out_file = os.path.join(temp_dir, "dalfox.txt")
+
+        base_cmd = f"dalfox url {target_url} --custom-payload {payload_file} --worker {conc}"
+    else:
+        list_path = ask("Path to list of URLs (for dalfox file mode)")
+        tclean = sanitize_target_for_dir(os.path.basename(os.path.dirname(list_path)))
+        temp_dir = os.path.join(BBP_BASE, tclean)
+        ensure_dir(temp_dir)
+        out_file = os.path.join(temp_dir, "dalfox.txt")
+
+        base_cmd = f"dalfox file {list_path} --custom-payload {payload_file} --worker {conc}"
+
+    if skip_mining.startswith("y"):
+        base_cmd += " --skip-mining-all"
+
+    base_cmd += f" | tee {out_file}"
+
+    print(Fore.CYAN + f"\n[+] Output -> {out_file}")
+    run_cmd(base_cmd, shell=True)
+
+# ===== FULL POWER MODE =====
+def run_fullpower():
+    # ask target + threads
+    target = ask("Target root (example.com, NOT https://)")
+    speed = ask("Threads (-t/-c all tools)", default="50")
+
+    tclean = sanitize_target_for_dir(target)
+
+    temp_dir = os.path.join(BBP_BASE, tclean)
+    ensure_dir(temp_dir)
+
+    final_dir = os.path.join(FULLPOWER_BASE, tclean)
+    ensure_dir(final_dir)
+
+    subs_file = os.path.join(temp_dir, "subs.txt")
+    httpx_file = os.path.join(temp_dir, "httpx.txt")
+    nuclei_out = os.path.join(final_dir, "fullpower.json")
+
+    timestamp = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
+    print(Fore.MAGENTA + f"\n[ FULL POWER @ {timestamp} ]")
+    print(Fore.MAGENTA + f"Target   : {target}")
+    print(Fore.MAGENTA + f"Temp dir : {temp_dir}")
+    print(Fore.MAGENTA + f"Final    : {nuclei_out}")
+    print(Fore.YELLOW  + "\nSubfinder -> httpx -> nuclei. Setelah selesai, file temp dihapus.\n")
+
+    # 1. subfinder
+    cmd_subfinder = [
+        "subfinder",
+        "-d", target,
+        "-t", speed,
+        "-silent",
+        "-o", subs_file
+    ]
+    print(Fore.CYAN + "\n[1] subfinder -> subs.txt")
+    run_cmd(cmd_subfinder)
+
+    # 2. httpx
+    cmd_httpx = [
+        "httpx",
+        "-l", subs_file,
+        "-mc", "200",
+        "-t", speed,
+        "-silent",
+        "-o", httpx_file
+    ]
+    print(Fore.CYAN + "\n[2] httpx -> httpx.txt")
+    run_cmd(cmd_httpx)
+
+    # 3. nuclei
+    cmd_nuclei = [
+        "nuclei",
+        "-l", httpx_file,
+        "-c", speed,
+        "-o", nuclei_out
+    ]
+    print(Fore.CYAN + "\n[3] nuclei -> fullpower.json")
+    run_cmd(cmd_nuclei)
+
+    # cleanup temp
+    for f in [subs_file, httpx_file]:
+        if os.path.isfile(f):
             try:
-                idx = int(choose) - 1
-                name = wl_entries[idx]
-                wl = os.path.join(wl_root, name)
-            except Exception as e:
-                print(c("Pilihan invalid.", S.R)); return
-    elif sec_entries:
-        print(c("Tidak ada wordlist lokal, tapi SecLists terdeteksi. Pilih salah satu:", S.Y))
-        for i, fp in enumerate(sec_entries, 1):
-            print(f"  {i}) {fp}")
-        print(f"  {len(sec_entries)+1}) custom path")
-        choose = ask("Pilih nomor (atau 'custom')", "1")
-        if choose == "custom" or (choose.isdigit() and int(choose) == len(sec_entries)+1):
-            wl = expand(ask("Masukkan path lengkap ke wordlist (.txt)"))
-            if not os.path.exists(wl):
-                print(c("Wordlist custom tidak ditemukan: " + wl, S.R)); return
-        else:
+                os.remove(f)
+                print(Fore.YELLOW + f"[cleanup] removed {f}")
+            except:
+                print(Fore.RED + f"[!] failed to remove {f}")
+
+    print(Fore.GREEN + "\n[✓] Full power finished.")
+    print(Fore.GREEN + f"    Report -> {nuclei_out}\n")
+
+# ===== ATTACK FOCUS MODE =====
+def run_attack_focus():
+    # 1) ask basic info
+    target = ask("Target root (example.com)")
+    bug_type = ask("Bug type? (xss / sqli / lfi)", default="xss").lower()
+    speed = ask("Speed / threads (default 50)", default="50")
+
+    tclean = sanitize_target_for_dir(target)
+
+    # temp dir for work
+    temp_dir = os.path.join(BBP_BASE, tclean)
+    ensure_dir(temp_dir)
+
+    # final dir for this bugtype
+    final_dir = os.path.join(ATTACK_BASE, bug_type, tclean)
+    ensure_dir(final_dir)
+
+    gau_raw = os.path.join(temp_dir, "gau_raw.txt")
+    alive_file = os.path.join(temp_dir, "alive.txt")
+    focus_file = os.path.join(temp_dir, "focus.txt")
+    result_file = os.path.join(final_dir, "result.json")
+
+    print(Fore.MAGENTA + "\n[ ATTACK FOCUS MODE ]")
+    print(Fore.MAGENTA + f"Target   : {target}")
+    print(Fore.MAGENTA + f"Bug type : {bug_type}")
+    print(Fore.MAGENTA + f"Temp dir : {temp_dir}")
+    print(Fore.MAGENTA + f"Final    : {result_file}")
+    print(Fore.YELLOW  + "\nChain: gau -> httpx -> gf(filter) -> tool exploit\n")
+
+    # Step A: gau
+    shell_gau = f"gau --subs {target} | tee {gau_raw}"
+    print(Fore.CYAN + "\n[1] gau -> gau_raw.txt")
+    run_cmd(shell_gau, shell=True)
+
+    # Step B: httpx (filter live 200)
+    cmd_httpx = [
+        "httpx",
+        "-l", gau_raw,
+        "-mc", "200",
+        "-t", speed,
+        "-silent",
+        "-o", alive_file
+    ]
+    print(Fore.CYAN + "\n[2] httpx -> alive.txt")
+    run_cmd(cmd_httpx)
+
+    # Step C: gf filter based on bug_type
+    gf_pattern = bug_type  # we assume gf xss / gf sqli / gf lfi exists
+    shell_gf = f"cat {alive_file} | gf {gf_pattern} | tee {focus_file}"
+    print(Fore.CYAN + "\n[3] gf filter -> focus.txt")
+    run_cmd(shell_gf, shell=True)
+
+    # Step D: run exploit tool depending on bug_type
+    print(Fore.CYAN + "\n[4] exploitation -> result.json")
+
+    if bug_type == "xss":
+        # dalfox file <focus_file>
+        payload_file = os.path.join(WL_BASE, "xss-payloadbox.txt")
+        if not os.path.isfile(payload_file):
+            payload_file = payload_file  # will still pass, user can fix manually
+
+        # using skip-mining-all by default (safer/quicker)
+        shell_dalfox = (
+            f"dalfox file {focus_file} "
+            f"--custom-payload {payload_file} "
+            f"--worker {speed} "
+            f"--skip-mining-all "
+            f"| tee {result_file}"
+        )
+        run_cmd(shell_dalfox, shell=True)
+
+    elif bug_type == "sqli":
+        # loop sqlmap on each URL in focus_file and tee to result_file
+        # We run safe mode (no dump)
+        # This builds a mini shell script pipeline
+        shell_sqlmap = (
+            "while read -r url; do "
+            "echo '[*] Testing SQLi:' \"$url\"; "
+            "sqlmap -u \"$url\" --batch --level=1 --risk=1 --random-agent --smart --flush-session; "
+            "done < " + focus_file + " | tee " + result_file
+        )
+        run_cmd(shell_sqlmap, shell=True)
+
+    elif bug_type == "lfi":
+        # nuclei against focus_file
+        cmd_nuclei = (
+            f"nuclei -l {focus_file} -c {speed} -o {result_file}"
+        )
+        run_cmd(cmd_nuclei, shell=True)
+
+    else:
+        print(Fore.RED + f"[!] Unknown bug_type '{bug_type}'. No exploit tool run.")
+        print(Fore.RED + "    (Supported: xss / sqli / lfi)")
+        # even if bug type invalid, we won't delete temp, so user can inspect.
+
+    # Step E: cleanup temps
+    for f in [gau_raw, alive_file, focus_file]:
+        if os.path.isfile(f):
             try:
-                idx = int(choose) - 1
-                wl = sec_entries[idx]
-            except Exception:
-                print(c("Pilihan invalid.", S.R)); return
-    else:
-        # no lists at all
-        if confirm("Tidak ditemukan wordlist lokal atau SecLists. Mau masukkan path wordlist manual?", True):
-            wl = expand(ask("Masukkan path lengkap ke wordlist (.txt)"))
-            if not os.path.exists(wl):
-                print(c("Wordlist custom tidak ditemukan: " + wl, S.R)); return
-        else:
-            print(c("Batal. Jalankan setup.sh untuk clone SecLists dan menaruh wordlist lokal.", S.Y))
-            return
+                os.remove(f)
+                print(Fore.YELLOW + f"[cleanup] removed {f}")
+            except:
+                print(Fore.RED + f"[!] failed to remove {f}")
 
-    # output & options
-    out_default_dir = expand(os.path.join(OUTPUT_ROOT, infer_target_from_path(target_u) or "ffuf"))
-    ensure_dir(out_default_dir)
-    outfile = ask("Nama file output (path atau nama file akan disimpan di folder target)", os.path.join(out_default_dir, "ffuf_result.txt"))
-    outfile = expand(outfile)
-    threads = ask("Threads (-t)", "20")
-    mc = ask("Match codes -mc (contoh: 200,301,302)", "200,301,302")
-    extra = ask("Extra ffuf flags (kosong = default '-c -v -r')", "-c -v -r")
+    print(Fore.GREEN + "\n[✓] Attack focus finished.")
+    print(Fore.GREEN + f"    Final report -> {result_file}\n")
 
-    if not which("ffuf"):
-        print(c("ffuf not found in PATH.", S.R)); return
-
-    # Build command: use target exactly as user provided for -u
-    cmd = f"ffuf -w \"{wl}\" -u '{target_u}' -t {threads} -mc {mc} {extra} -o \"{outfile}\""
-
-    print(c("\nPreview: " + cmd, S.Y))
-    if confirm("Jalankan sekarang?", True):
-        backup_if_exists(outfile)
-        rc = run_shell(cmd)
-        if os.path.exists(outfile):
-            size = os.path.getsize(outfile)
-            print(c(f"[OK] Saved -> {outfile} (bytes: {size})", S.G))
-        else:
-            if rc != 0:
-                print(c("[!] ffuf exited with non-zero status; cek pesan di atas.", S.R))
-            else:
-                print(c("[!] ffuf selesai tapi output file tidak ditemukan. Cek opsi -o atau permission.", S.Y))
-                
-def dalfox_menu():
-    print(S.B + "\n== Dalfox (XSS) ==" + S.RESET)
-    mode = ask("Mode: 1) url  2) file", "2")
-    if mode.strip() == "1":
-        target = ask("Masukkan URL (contoh: https://example.com/?q=test)")
-        if not target: return
-        input_flag = "url"
-        input_val = f"\"{target}\""
-        target_name = infer_target_from_path(target) or Path(target).hostname if hasattr(Path(target), "hostname") else Path(target).name
-    else:
-        fp = expand(ask("Masukkan path file (contoh ~/bug-hunting/bbp/example.com/endpoints.txt)"))
-        if not os.path.exists(fp):
-            print(c("File not found.", S.R)); return
-        input_flag = "file"
-        input_val = fp
-        target_name = infer_target_from_path(fp) or Path(fp).parent.name
-    payload_default = os.path.join(WORDLIST_ROOT, "xss.txt")
-    use_def = confirm(f"Pakai --custom-payload default {payload_default} ?", True)
-    if use_def:
-        payload = payload_default
-    else:
-        payload = expand(ask("Masukkan path payload file"))
-        if not os.path.exists(payload):
-            print(c("Payload file not found.", S.R)); return
-    skip_mining = confirm("Skip mining (--skip-mining-all)? (recommended)", True)
-    speed = ask("Kecepatan: 1) Chill (-w10) 2) Balanced (-w30) 3) Turbo (-w60)  (default 2)", "2")
-    wmap = {"1":"10","2":"30","3":"60"}
-    workers = wmap.get(speed, speed)
-    outdir = ensure_dir(os.path.join(OUTPUT_ROOT, target_name))
-    outfile = os.path.join(outdir, "dalfox.txt")
-    if not which("dalfox"):
-        print(c("dalfox not found in PATH.", S.R)); return
-    cmd = f"dalfox {input_flag} {input_val} --custom-payload {payload} -w {workers} -o \"{outfile}\""
-    if skip_mining:
-        cmd += " --skip-mining-all"
-    print(c("Preview: " + cmd, S.Y))
-    if confirm("Jalankan sekarang?", True):
-        backup_if_exists(outfile)
-        run_shell(cmd)
-        if os.path.exists(outfile):
-            n = sum(1 for _ in open(outfile, "r", errors="ignore"))
-            print(c(f"[OK] Saved -> {outfile} ({n} lines)", S.G))
-
-def check_env_menu():
-    print(S.B + "\n== Environment check ==" + S.RESET)
-    bins = ["subfinder","httpx","gau","ffuf","dalfox","nuclei","gf","waybackurls","hakrawler","assetfinder","dnsx"]
-    missing = []
-    for b in bins:
-        if not which(b):
-            missing.append(b)
-    if not missing:
-        print(c("All required binaries appear to be in PATH. Good.", S.G))
-    else:
-        print(c("Missing tools (install these):", S.Y), ", ".join(missing))
-        print(c("Example go install (subfinder/httpx/gau):", S.C))
-        print("GO111MODULE=on go install github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest")
-        print("GO111MODULE=on go install github.com/projectdiscovery/httpx/cmd/httpx@latest")
-        print("GO111MODULE=on go install github.com/hahwul/dalfox/v2@latest")
-        print("...")
-
-# -------------------- Main menu --------------------
-def main_menu():
+# ===== main loop =====
+def main():
     while True:
         os.system("clear")
         banner()
-        print(S.B + "Main menu:" + S.RESET)
-        print(c("[1]", S.Y), "Subfinder          - subdomain enumeration")
-        print(c("[2]", S.Y), "HTTPX              - probe live hosts")
-        print(c("[3]", S.Y), "GAU                - getallurls (ask target)")
-        print(c("[4]", S.Y), "waybackurls        - archive URLs")
-        print(c("[5]", S.Y), "hakrawler          - quick crawler")
-        print(c("[6]", S.Y), "assetfinder        - asset enumeration")
-        print(c("[7]", S.Y), "Combine endpoints  - merge outputs")
-        print(c("[8]", S.Y), "GF                 - pattern filtering")
-        print(c("[9]", S.Y), "Nuclei             - template scanner")
-        print(c("[10]", S.Y), "FFUF               - directory/param fuzzing")
-        print(c("[11]", S.Y), "Dalfox             - XSS automation")
-        print(c("[12]", S.Y), "Check environment  - missing binaries")
-        print(c("[0]", S.R),  "Exit")
-        choice = ask("Pilih nomor")
-        if choice == "1": subfinder_menu()
-        elif choice == "2": httpx_menu()
-        elif choice == "3": gau_menu()
-        elif choice == "4": wayback_menu()
-        elif choice == "5": hakrawler_menu()
-        elif choice == "6": assetfinder_menu()
-        elif choice == "7": combine_endpoints_menu()
-        elif choice == "8": gf_menu()
-        elif choice == "9": nuclei_menu()
-        elif choice == "10": ffuf_menu()
-        elif choice == "11": dalfox_menu()
-        elif choice == "12": check_env_menu()
-        elif choice == "0": 
-            print(c("Bye 👋", S.C))
-            sys.exit(0)
-        else:
-            print(c("Pilihan tidak dikenali.", S.R))
-        input(c("\nTekan Enter untuk kembali ke menu..."))
+        menu()
+        choice = ask("pilih menu", default="9")
 
-# -------------------- Entrypoint --------------------
+        if choice == "0":
+            run_fullpower()
+        elif choice == "1":
+            run_subfinder()
+        elif choice == "2":
+            run_httpx()
+        elif choice == "3":
+            run_gau()
+        elif choice == "4":
+            run_nuclei()
+        elif choice == "5":
+            run_hakrawler()
+        elif choice == "6":
+            run_ffuf()
+        elif choice == "7":
+            run_gf()
+        elif choice == "8":
+            run_dalfox()
+        elif choice == "9":
+            print(Fore.YELLOW + "bye hacker. stay legal. ✌")
+            break
+        elif choice == "10":
+            run_attack_focus()
+        else:
+            print(Fore.RED + "invalid choice.")
+
+        input(Fore.CYAN + "\n[press ENTER to continue]")
+
 if __name__ == "__main__":
-    try:
-        main_menu()
-    except KeyboardInterrupt:
-        print("\n" + c("Interrupted. Bye.", S.R))
-        sys.exit(0)
+    main()
