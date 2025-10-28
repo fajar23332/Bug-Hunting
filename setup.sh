@@ -135,6 +135,11 @@ export PATH="$HOME/.local/bin:$PATH"
 echo "[4/9] Fetch SecLists subset (sparse-checkout preferred)"
 mkdir -p "$(dirname "$SECLISTS_DIR")"
 
+XRAY_VERSION="1.9.11"
+XRAY_ZIP_URL="https://github.com/chaitin/xray/releases/download/${XRAY_VERSION}/xray_linux_amd64.zip"
+XRAY_TMP_DIR="/tmp/xray-${XRAY_VERSION}"
+XRAY_INSTALL_DIR="/opt/xray"
+
 # Which SecLists paths we actually want
 read -r -d '' SECLISTS_PATHS <<'PATHS' || true
 Discovery/Web-Content/raft-large-directories.txt
@@ -253,6 +258,59 @@ for bin in "${TOOLS[@]}"; do
     echo "[w] $bin not found in $SRC_BIN (maybe Go install failed / Go missing)"
   fi
 done
+
+echo
+echo "[X/9] Installing xray ${XRAY_VERSION} -> ${XRAY_INSTALL_DIR}"
+
+# deps kecil buat ekstrak
+sudo apt install -y unzip || true
+
+# siapkan folder
+sudo mkdir -p "${XRAY_INSTALL_DIR}"
+
+echo "[i] Downloading xray from ${XRAY_ZIP_URL}"
+cd /tmp
+wget -O xray_linux_amd64.zip "${XRAY_ZIP_URL}"
+
+rm -rf "${XRAY_TMP_DIR}"
+mkdir -p "${XRAY_TMP_DIR}"
+unzip /tmp/xray_linux_amd64.zip -d "${XRAY_TMP_DIR}"
+
+# copy semua file hasil unzip ke /opt/xray
+sudo cp -r "${XRAY_TMP_DIR}"/* "${XRAY_INSTALL_DIR}/"
+
+# rename bin jadi 'xray' biar cakep
+if [ -f "${XRAY_INSTALL_DIR}/xray_linux_amd64" ]; then
+  sudo mv "${XRAY_INSTALL_DIR}/xray_linux_amd64" "${XRAY_INSTALL_DIR}/xray"
+fi
+
+# permission & owner root
+sudo chown -R root:root "${XRAY_INSTALL_DIR}"
+sudo chmod -R 755 "${XRAY_INSTALL_DIR}"
+
+# bikin launcher global /usr/local/bin/xray
+sudo tee /usr/local/bin/xray >/dev/null << 'EOF'
+#!/bin/bash
+# Global launcher for xray: always run inside /opt/xray
+cd /opt/xray || {
+    echo "[xray] /opt/xray not found."
+    exit 1
+}
+exec ./xray "$@"
+EOF
+
+sudo chmod +x /usr/local/bin/xray
+echo "[i] xray installed. Wrapper: $(which xray || echo 'not found')"
+
+echo
+echo "[X.5/9] Bootstrapping xray..."
+# pertama kali jalanin xray biar dia download config/pocs/ dll
+xray --help || true
+xray webscan --url "http://127.0.0.1" --json-output /opt/xray/bootstrap-1.json || true
+xray webscan --url "http://127.0.0.1" --json-output /opt/xray/bootstrap-2.json || true
+
+echo "[i] xray directory after bootstrap:"
+sudo ls -R "${XRAY_INSTALL_DIR}" || true
 
 # --------- [8/9] Quick verification ----------
 echo
