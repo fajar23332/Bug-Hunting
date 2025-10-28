@@ -55,34 +55,43 @@ fi
 echo "[i] Go tools install attempt finished."
 echo
 
-# --------- [2.5/9] Install gf patterns (xss/sqli/lfi/etc) ----------
+# --------- [2.5/9] Setting up gf patterns (~/.gf) ----------
 echo "[2.5/9] Setting up gf patterns (~/.gf)"
 
 GF_DIR="$HOME/.gf"
 TOOLS_TMP="$HOME/.hunt-tmp-tools"
 GF_REPO_DIR="$TOOLS_TMP/gf"
+GFP_REPO_DIR="$TOOLS_TMP/Gf-Patterns"
 
 mkdir -p "$GF_DIR"
 mkdir -p "$TOOLS_TMP"
 
-# clone the gf repo just to grab the pattern jsons
-if [ -d "$GF_REPO_DIR" ]; then
-  rm -rf "$GF_REPO_DIR"
-fi
-
+echo "[i] Cloning tomnomnom/gf for base patterns..."
+rm -rf "$GF_REPO_DIR" 2>/dev/null || true
 git clone --depth 1 https://github.com/tomnomnom/gf.git "$GF_REPO_DIR" 2>/dev/null || true
 
-# copy example patterns if available
 if [ -d "$GF_REPO_DIR/examples" ]; then
-  cp -v "$GF_REPO_DIR/examples/"*.json "$GF_DIR"/ 2>/dev/null || true
-  echo "[i] Copied gf patterns into $GF_DIR:"
-  ls "$GF_DIR" || true
+    cp -v "$GF_REPO_DIR/examples/"*.json "$GF_DIR"/ 2>/dev/null || true
 else
-  echo "[w] Couldn't find gf/examples patterns. gf patterns may be missing."
+    echo "[w] gf/examples not found, skipping base patterns."
 fi
 
-# optional cleanup tmp clone
+echo "[i] Cloning 1ndianl33t/Gf-Patterns for vuln patterns (xss/sqli/lfi/ssrf/etc)..."
+rm -rf "$GFP_REPO_DIR" 2>/dev/null || true
+git clone --depth 1 https://github.com/1ndianl33t/Gf-Patterns.git "$GFP_REPO_DIR" 2>/dev/null || true
+
+if [ -d "$GFP_REPO_DIR" ]; then
+    cp -v "$GFP_REPO_DIR/"*.json "$GF_DIR"/ 2>/dev/null || true
+else
+    echo "[w] Gf-Patterns clone failed, skipping community patterns."
+fi
+
+echo "[i] Final ~/.gf patterns:"
+ls "$GF_DIR" || true
+
+# cleanup tmp
 rm -rf "$TOOLS_TMP" 2>/dev/null || true
+
 
 # --------- [3/9] Python deps for hunt.py UI ----------
 echo "[3/9] Installing Python dependencies for hunt.py UI (colorama, pyfiglet, termcolor, tqdm)"
