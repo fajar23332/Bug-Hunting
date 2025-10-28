@@ -43,7 +43,7 @@ else
   go install github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest || true
   go install github.com/projectdiscovery/httpx/cmd/httpx@latest || true
   go install github.com/lc/gau/v2/cmd/gau@latest || true
-  go install github.com/projectdiscovery/nuclei/v2/cmd/nuclei@latest || true
+  go install -v github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest || true
   go install github.com/projectdiscovery/dnsx/cmd/dnsx@latest || true
   go install github.com/hakluke/hakrawler@latest || true
   go install github.com/tomnomnom/assetfinder@latest || true
