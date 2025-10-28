@@ -11,18 +11,17 @@ SECLISTS_DIR="$HOME/Seclists/SecLists-master"
 WL_LOCAL="$HOME/Bug-Hunting/wordlist"
 GOBIN="${GOBIN:-$HOME/go/bin}"
 GOPATH="${GOPATH:-$HOME/go}"
-PATH_ADD_LINE='export PATH="$HOME/go/bin:$HOME/.local/bin:$PATH"'
+PATH_ADD_LINE='export PATH="/usr/local/go/bin:$HOME/go/bin:$HOME/.local/bin:$PATH"'
 
 # --------- Update & essentials ----------
 echo "[1/8] apt update & install basics (git, curl, build tools, python)"
 sudo apt update -y
 sudo apt install -y git curl wget ca-certificates build-essential python3 python3-pip
 
-
 # Ensure GOBIN/GOPATH exist and present in PATH for this run
 mkdir -p "$GOBIN"
 export GOPATH="$GOPATH"
-export PATH="$GOBIN:$HOME/.local/bin:$PATH"
+export PATH="/usr/local/go/bin:$GOBIN:$HOME/.local/bin:$PATH"
 
 # persist PATH to .bashrc if missing
 if ! grep -qxF "$PATH_ADD_LINE" "$HOME/.bashrc" 2>/dev/null; then
@@ -34,21 +33,24 @@ fi
 echo "[2/8] Installing/updating Go tools to $GOBIN"
 export GO111MODULE=on
 
-# ensure go binary exists
 if ! command -v go >/dev/null 2>&1; then
-  echo "[!] go not found in PATH after apt install. Aborting go tool install."
+  echo "[!] 'go' not found in PATH."
+  echo "[!] Skipping install of recon tools (subfinder/httpx/nuclei/etc)."
+  echo "[!] Install Go first (lihat README), lalu jalankan ulang ./setup.sh"
 else
+  echo "[i] go detected: $(go version)"
   echo "[i] Installing/updating common Go tools"
   # wrap installs with || true to avoid entirely failing on single-tool errors
   go install github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest || true
   go install github.com/projectdiscovery/httpx/cmd/httpx@latest || true
   go install github.com/lc/gau/v2/cmd/gau@latest || true
-  go install -v github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest || true
+  go install github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest || true
   go install github.com/projectdiscovery/dnsx/cmd/dnsx@latest || true
   go install github.com/hakluke/hakrawler@latest || true
   go install github.com/tomnomnom/assetfinder@latest || true
   go install github.com/ffuf/ffuf@latest || true
   go install github.com/hahwul/dalfox/v2@latest || true
+  go install github.com/tomnomnom/gf@latest || true
 fi
 
 echo "[i] Go tools attempt finished. Make sure $GOBIN is in PATH (source ~/.bashrc)."
@@ -62,15 +64,13 @@ python3 -m pip install --user colorama pyfiglet termcolor tqdm
 # ensure ~/.local/bin in PATH for pip user installs (already added above)
 export PATH="$HOME/.local/bin:$PATH"
 
-### REPLACE FROM HERE: Clone SecLists (sparse or fallback) ###
 echo "[4/8] Fetch SecLists subset (sparse-checkout preferred)"
 mkdir -p "$(dirname "$SECLISTS_DIR")"
 
-# list of repo-relative paths we want (edit/extend if perlu)
 read -r -d '' SECLISTS_PATHS <<'PATHS' || true
 Discovery/Web-Content/raft-large-directories.txt
 Discovery/Web-Content/raft-medium-directories.txt
-Discovery/Web-Content/combined_directories.txt
+Discovery/Web-Content/combined-directories.txt
 Discovery/Web-Content/web-extensions.txt
 Discovery/Web-Content/api/api-endpoints.txt
 Fuzzing/big-list-of-naughty-strings.txt
@@ -80,19 +80,15 @@ Fuzzing/Databases/SQLi/Generic-SQLi.txt
 Fuzzing/LFI/LFI-LFISuite-pathtotest.txt
 PATHS
 
-# If repo not present at all, attempt sparse-checkout (preferred)
 if [ ! -d "$SECLISTS_DIR/.git" ]; then
   echo "[i] Initializing sparse clone of SecLists into $SECLISTS_DIR"
-  # create a bare clone dir skeleton
   git clone --depth 1 --no-checkout https://github.com/danielmiessler/SecLists.git "$SECLISTS_DIR" || {
     echo "[w] shallow clone with --no-checkout failed; falling back to per-file downloads"
     SPARSE_OK=0
   }
-  # try sparse-checkout approach
   if command -v git >/dev/null 2>&1 && [ -d "$SECLISTS_DIR/.git" ]; then
     cd "$SECLISTS_DIR"
     git sparse-checkout init --cone >/dev/null 2>&1 || true
-    # build list array
     readarray -t _paths <<< "$SECLISTS_PATHS"
     git sparse-checkout set "${_paths[@]}" >/dev/null 2>&1 || true
     git checkout --quiet || true
@@ -111,7 +107,6 @@ else
   SPARSE_OK=1
 fi
 
-# Fallback: if sparse not available or failed, download each file via raw.githubusercontent.com
 if [ "${SPARSE_OK:-0}" -ne 1 ]; then
   echo "[!] sparse-checkout failed or not supported. Falling back to per-file raw download."
   mkdir -p "$SECLISTS_DIR"
@@ -120,7 +115,6 @@ if [ "${SPARSE_OK:-0}" -ne 1 ]; then
   BRANCH="master"
   readarray -t _paths <<< "$SECLISTS_PATHS"
   for p in "${_paths[@]}"; do
-    # save to same relative path inside SECLISTS_DIR so later cp -n works
     out="$SECLISTS_DIR/$p"
     outdir="$(dirname "$out")"
     mkdir -p "$outdir"
@@ -134,24 +128,25 @@ if [ "${SPARSE_OK:-0}" -ne 1 ]; then
     fi
   done
 fi
-### REPLACE TO HERE ###
 
-# --------- Prepare local wordlist folder & copy defaults ----------
 echo "[5/8] Prepare local wordlist folder: $WL_LOCAL"
 mkdir -p "$WL_LOCAL"
 
-# copy recommended lists (no overwrite)
+cp -n "$SECLISTS_DIR/Fuzzing/LFI/LFI-LFISuite-pathtotest.txt" "$WL_LOCAL/lfi.txt" 2>/dev/null || true
+cp -n "$SECLISTS_DIR/Fuzzing/Databases/SQLi/Generic-SQLi.txt" "$WL_LOCAL/sqli.txt" 2>/dev/null || true
+
 cp -n "$SECLISTS_DIR/Discovery/Web-Content/raft-large-directories.txt" "$WL_LOCAL/raft-large-directories.txt" 2>/dev/null || true
 cp -n "$SECLISTS_DIR/Discovery/Web-Content/raft-medium-directories.txt" "$WL_LOCAL/raft-medium-directories.txt" 2>/dev/null || true
 cp -n "$SECLISTS_DIR/Discovery/Web-Content/combined_directories.txt" "$WL_LOCAL/combined_directories.txt" 2>/dev/null || true
+cp -n "$SECLISTS_DIR/Discovery/Web-Content/web-extensions.txt" "$WL_LOCAL/web-extensions.txt" 2>/dev/null || true
+cp -n "$SECLISTS_DIR/Discovery/Web-Content/api/api-endpoints.txt" "$WL_LOCAL/api-endpoints.txt" 2>/dev/null || true
+
 cp -n "$SECLISTS_DIR/Fuzzing/big-list-of-naughty-strings.txt" "$WL_LOCAL/big-list-of-naughty-strings.txt" 2>/dev/null || true
 cp -n "$SECLISTS_DIR/Fuzzing/XSS/Polyglots/XSS-Polyglot-Ultimate-0xsobky.txt" "$WL_LOCAL/xss-polyglot-ultimate.txt" 2>/dev/null || true
 cp -n "$SECLISTS_DIR/Fuzzing/XSS/human-friendly/XSS-payloadbox.txt" "$WL_LOCAL/xss-payloadbox.txt" 2>/dev/null || true
-cp -n "$SECLISTS_DIR/Discovery/Web-Content/web-extensions.txt" "$WL_LOCAL/web-extensions.txt" 2>/dev/null || true
 
 echo "[i] Copied starter wordlists to $WL_LOCAL (if present in SecLists)"
 
-# --------- Optional: copy hunt.py to /usr/local/bin (ask) ----------
 echo "[6/8] Optional: install hunt.py to /usr/local/bin for global use"
 if [ -f "./hunt.py" ]; then
   read -r -p "Copy local ./hunt.py to /usr/local/bin/hunt and make executable? [y/N] " install_hunt || install_hunt="n"
@@ -166,7 +161,6 @@ else
   echo "[i] hunt.py not found in current dir; skip global install"
 fi
 
-# --------- Final messages & verification ----------
 echo
 echo "[7/8] Quick verification (binaries in PATH?)"
 which subfinder || echo "WARN: subfinder not found in PATH"
