@@ -184,3 +184,13 @@ echo " - Go bin (GOBIN): $GOBIN"
 echo
 echo "NOTE: Please 'source ~/.bashrc' or open a new shell to apply PATH changes (go & pip user bin)."
 echo "Run: python3 hunt.py  (or 'hunt' if you installed to /usr/local/bin)"
+echo
+echo "Quick checks:"
+echo "  which subfinder  -> $(command -v subfinder || echo 'missing')"
+echo "  which httpx      -> $(command -v httpx || echo 'missing')"
+echo "  which nuclei     -> $(command -v nuclei || echo 'missing')"
+echo "  which ffuf       -> $(command -v ffuf || echo 'missing')"
+echo "  wordlists at     -> $WL_LOCAL"
+echo
+echo "[i] Script finished successfully."
+exit 0
