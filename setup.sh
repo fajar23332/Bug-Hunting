@@ -61,16 +61,79 @@ python3 -m pip install --user colorama pyfiglet termcolor tqdm
 # ensure ~/.local/bin in PATH for pip user installs (already added above)
 export PATH="$HOME/.local/bin:$PATH"
 
-# --------- Clone SecLists ----------
-echo "[4/8] Clone SecLists (shallow clone to save time)"
-if [ ! -d "$SECLISTS_DIR" ]; then
-  mkdir -p "$(dirname "$SECLISTS_DIR")"
-  git clone --depth 1 https://github.com/danielmiessler/SecLists.git "$SECLISTS_DIR"
-  echo "[i] SecLists cloned to: $SECLISTS_DIR"
+### REPLACE FROM HERE: Clone SecLists (sparse or fallback) ###
+echo "[4/8] Fetch SecLists subset (sparse-checkout preferred)"
+mkdir -p "$(dirname "$SECLISTS_DIR")"
+
+# list of repo-relative paths we want (edit/extend if perlu)
+read -r -d '' SECLISTS_PATHS <<'PATHS' || true
+Discovery/Web-Content/raft-large-directories.txt
+Discovery/Web-Content/raft-medium-directories.txt
+Discovery/Web-Content/combined_directories.txt
+Discovery/Web-Content/web-extensions.txt
+Discovery/Web-Content/api/api-endpoints.txt
+Fuzzing/big-list-of-naughty-strings.txt
+Fuzzing/XSS/Polyglots/XSS-Polyglot-Ultimate-0xsobky.txt
+Fuzzing/XSS/human-friendly/XSS-payloadbox.txt
+Fuzzing/Databases/SQLi/Generic-SQLi.txt
+Fuzzing/LFI/LFI-LFISuite-pathtotest.txt
+PATHS
+
+# If repo not present at all, attempt sparse-checkout (preferred)
+if [ ! -d "$SECLISTS_DIR/.git" ]; then
+  echo "[i] Initializing sparse clone of SecLists into $SECLISTS_DIR"
+  # create a bare clone dir skeleton
+  git clone --depth 1 --no-checkout https://github.com/danielmiessler/SecLists.git "$SECLISTS_DIR" || {
+    echo "[w] shallow clone with --no-checkout failed; falling back to per-file downloads"
+    SPARSE_OK=0
+  }
+  # try sparse-checkout approach
+  if command -v git >/dev/null 2>&1 && [ -d "$SECLISTS_DIR/.git" ]; then
+    cd "$SECLISTS_DIR"
+    git sparse-checkout init --cone >/dev/null 2>&1 || true
+    # build list array
+    readarray -t _paths <<< "$SECLISTS_PATHS"
+    git sparse-checkout set "${_paths[@]}" >/dev/null 2>&1 || true
+    git checkout --quiet || true
+    SPARSE_OK=1
+    echo "[i] Sparse-checkout applied. Selected paths should be available under $SECLISTS_DIR"
+  else
+    SPARSE_OK=0
+  fi
 else
-  echo "[i] SecLists already exists at $SECLISTS_DIR — attempting shallow pull"
-  git -C "$SECLISTS_DIR" pull --ff-only || true
+  echo "[i] SecLists repo skeleton exists at $SECLISTS_DIR — attempting to update subset"
+  cd "$SECLISTS_DIR"
+  git sparse-checkout init --cone >/dev/null 2>&1 || true
+  readarray -t _paths <<< "$SECLISTS_PATHS"
+  git sparse-checkout set "${_paths[@]}" >/dev/null 2>&1 || true
+  git pull --ff-only || true
+  SPARSE_OK=1
 fi
+
+# Fallback: if sparse not available or failed, download each file via raw.githubusercontent.com
+if [ "${SPARSE_OK:-0}" -ne 1 ]; then
+  echo "[!] sparse-checkout failed or not supported. Falling back to per-file raw download."
+  mkdir -p "$SECLISTS_DIR"
+  REPO_USER="danielmiessler"
+  REPO_NAME="SecLists"
+  BRANCH="master"
+  readarray -t _paths <<< "$SECLISTS_PATHS"
+  for p in "${_paths[@]}"; do
+    # save to same relative path inside SECLISTS_DIR so later cp -n works
+    out="$SECLISTS_DIR/$p"
+    outdir="$(dirname "$out")"
+    mkdir -p "$outdir"
+    url="https://raw.githubusercontent.com/${REPO_USER}/${REPO_NAME}/${BRANCH}/${p}"
+    echo "[i] Downloading $p"
+    if curl -sSfL "$url" -o "$out"; then
+      echo "    saved: $out"
+    else
+      echo "    warn: failed to download $p (skipping)"
+      rm -f "$out"
+    fi
+  done
+fi
+### REPLACE TO HERE ###
 
 # --------- Prepare local wordlist folder & copy defaults ----------
 echo "[5/8] Prepare local wordlist folder: $WL_LOCAL"
