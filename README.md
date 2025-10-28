@@ -20,16 +20,16 @@
 
 ```bash
 
-
-
-# 1) Clone repo & jalankan setup
+# 1) superuser
 sudo su
+
+# 2) Clone repo & jalankan setup
 git clone https://github.com/fajar23332/Bug-Hunting.git
 cd Bug-Hunting
 chmod +x setup.sh hunt.py
 
-# 2) Jalankan setup (install dependencies, clone SecLists subset, copy wordlists, dll.)
+# 3) Jalankan setup (install dependencies, clone SecLists subset, copy wordlists, dll.)
 ./setup.sh
 
-# 3) Setelah setup selesai: jalankan UI
+# 4) Setelah setup selesai: jalankan UI
 python3 hunt.py
