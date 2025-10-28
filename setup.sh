@@ -55,6 +55,35 @@ fi
 echo "[i] Go tools install attempt finished."
 echo
 
+# --------- [2.5/9] Install gf patterns (xss/sqli/lfi/etc) ----------
+echo "[2.5/9] Setting up gf patterns (~/.gf)"
+
+GF_DIR="$HOME/.gf"
+TOOLS_TMP="$HOME/.hunt-tmp-tools"
+GF_REPO_DIR="$TOOLS_TMP/gf"
+
+mkdir -p "$GF_DIR"
+mkdir -p "$TOOLS_TMP"
+
+# clone the gf repo just to grab the pattern jsons
+if [ -d "$GF_REPO_DIR" ]; then
+  rm -rf "$GF_REPO_DIR"
+fi
+
+git clone --depth 1 https://github.com/tomnomnom/gf.git "$GF_REPO_DIR" 2>/dev/null || true
+
+# copy example patterns if available
+if [ -d "$GF_REPO_DIR/examples" ]; then
+  cp -v "$GF_REPO_DIR/examples/"*.json "$GF_DIR"/ 2>/dev/null || true
+  echo "[i] Copied gf patterns into $GF_DIR:"
+  ls "$GF_DIR" || true
+else
+  echo "[w] Couldn't find gf/examples patterns. gf patterns may be missing."
+fi
+
+# optional cleanup tmp clone
+rm -rf "$TOOLS_TMP" 2>/dev/null || true
+
 # --------- [3/9] Python deps for hunt.py UI ----------
 echo "[3/9] Installing Python dependencies for hunt.py UI (colorama, pyfiglet, termcolor, tqdm)"
 python3 -m pip install --user --upgrade pip
