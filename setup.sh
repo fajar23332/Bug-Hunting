@@ -13,10 +13,16 @@ GOBIN="${GOBIN:-$HOME/go/bin}"
 GOPATH="${GOPATH:-$HOME/go}"
 PATH_ADD_LINE='export PATH="/usr/local/go/bin:$HOME/go/bin:$HOME/.local/bin:$PATH"'
 
+# xray vars
+XRAY_VERSION="1.9.11"
+XRAY_ZIP_URL="https://github.com/chaitin/xray/releases/download/${XRAY_VERSION}/xray_linux_amd64.zip"
+XRAY_TMP_DIR="/tmp/xray-${XRAY_VERSION}"
+XRAY_INSTALL_DIR="/opt/xray"
+
 # --------- [1/9] Update & essentials ----------
 echo "[1/9] apt update & install basics (git, curl, build tools, python, sqlmap)"
 sudo apt update -y
-sudo apt install -y git curl wget ca-certificates build-essential python3 python3-pip sqlmap
+sudo apt install -y git curl wget ca-certificates build-essential python3 python3-pip sqlmap unzip
 
 # prepare GOBIN/GOPATH + PATH for current shell run
 mkdir -p "$GOBIN"
@@ -39,7 +45,6 @@ if ! command -v go >/dev/null 2>&1; then
 else
   echo "[i] go detected: $(go version)"
   echo "[i] Installing/updating recon tools..."
-  # wrap each with || true biar gak nge-crash semuanya kalau satu gagal
   go install github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest || true
   go install github.com/projectdiscovery/httpx/cmd/httpx@latest || true
   go install github.com/lc/gau/v2/cmd/gau@latest || true
@@ -55,21 +60,19 @@ fi
 echo "[i] Go tools install attempt finished."
 echo
 
-# --------- [2.5/9] Setting up gf patterns (~/.gf) ----------
-echo "[2.5/9] Setting up gf patterns (~/.gf)"
+# --------- [3/9] Setting up gf patterns (~/.gf) ----------
+echo "[3/9] Setting up gf patterns (~/.gf)"
 
 GF_DIR="$HOME/.gf"
 TOOLS_TMP="$HOME/.hunt-tmp-tools"
 GF_REPO_DIR="$TOOLS_TMP/gf"
 GFP_REPO_DIR="$TOOLS_TMP/Gf-Patterns"
 
-mkdir -p "$GF_DIR"
-mkdir -p "$TOOLS_TMP"
+mkdir -p "$GF_DIR" "$TOOLS_TMP"
 
 echo "[i] Cloning tomnomnom/gf for base patterns..."
 rm -rf "$GF_REPO_DIR" 2>/dev/null || true
 git clone --depth 1 https://github.com/tomnomnom/gf.git "$GF_REPO_DIR" 2>/dev/null || true
-
 if [ -d "$GF_REPO_DIR/examples" ]; then
     cp -v "$GF_REPO_DIR/examples/"*.json "$GF_DIR"/ 2>/dev/null || true
 else
@@ -79,7 +82,6 @@ fi
 echo "[i] Cloning 1ndianl33t/Gf-Patterns for vuln patterns (xss/sqli/lfi/ssrf/etc)..."
 rm -rf "$GFP_REPO_DIR" 2>/dev/null || true
 git clone --depth 1 https://github.com/1ndianl33t/Gf-Patterns.git "$GFP_REPO_DIR" 2>/dev/null || true
-
 if [ -d "$GFP_REPO_DIR" ]; then
     cp -v "$GFP_REPO_DIR/"*.json "$GF_DIR"/ 2>/dev/null || true
 else
@@ -88,14 +90,10 @@ fi
 
 echo "[i] Final ~/.gf patterns:"
 ls "$GF_DIR" || true
-
-# cleanup tmp
 rm -rf "$TOOLS_TMP" 2>/dev/null || true
 
-# ⬇⬇⬇ MASUKIN BLOCK BARU DI SINI
-echo
-echo "[3/9] Writing default gau config to \$HOME/.gau.toml"
-
+# --------- [4/9] gau config ----------
+echo "[4/9] Writing default gau config to \$HOME/.gau.toml"
 cat > "$HOME/.gau.toml" << 'EOF'
 threads = 2
 verbose = false
@@ -117,30 +115,20 @@ json = false
   filterstatuscodes = []
   filtermimetypes = ["image/png", "image/jpg", "image/svg+xml"]
 EOF
-
 echo "[i] gau config written to $HOME/.gau.toml"
 echo "[i] you can edit later for urlscan api key or threads"
 echo
-# ⬆⬆⬆ SAMPAI SINI
 
-
-# --------- [3/9] Python deps for hunt.py UI ----------
-echo "[3/9] Installing Python dependencies for hunt.py UI (colorama, pyfiglet, termcolor, tqdm)"
+# --------- [5/9] Python deps for hunt.py UI ----------
+echo "[5/9] Installing Python dependencies for hunt.py UI (colorama, pyfiglet, termcolor, tqdm)"
 python3 -m pip install --user --upgrade pip --break-system-packages
 python3 -m pip install --user colorama pyfiglet termcolor tqdm --break-system-packages
-# ensure ~/.local/bin in PATH for this run (already exported above, but re-assert)
 export PATH="$HOME/.local/bin:$PATH"
 
-# --------- [4/9] Fetch SecLists subset ----------
-echo "[4/9] Fetch SecLists subset (sparse-checkout preferred)"
+# --------- [6/9] Fetch SecLists subset ----------
+echo "[6/9] Fetch SecLists subset (sparse-checkout preferred)"
 mkdir -p "$(dirname "$SECLISTS_DIR")"
 
-XRAY_VERSION="1.9.11"
-XRAY_ZIP_URL="https://github.com/chaitin/xray/releases/download/${XRAY_VERSION}/xray_linux_amd64.zip"
-XRAY_TMP_DIR="/tmp/xray-${XRAY_VERSION}"
-XRAY_INSTALL_DIR="/opt/xray"
-
-# Which SecLists paths we actually want
 read -r -d '' SECLISTS_PATHS <<'PATHS' || true
 Discovery/Web-Content/raft-large-directories.txt
 Discovery/Web-Content/raft-medium-directories.txt
@@ -157,7 +145,7 @@ PATHS
 if [ ! -d "$SECLISTS_DIR/.git" ]; then
   echo "[i] Initializing sparse clone of SecLists into $SECLISTS_DIR"
   git clone --depth 1 --no-checkout https://github.com/danielmiessler/SecLists.git "$SECLISTS_DIR" || {
-    echo "[w] shallow clone with --no-checkout failed; falling back to raw download mode"
+    echo "[w] sparse clone failed; falling back to raw download mode"
     SPARSE_OK=0
   }
   if command -v git >/dev/null 2>&1 && [ -d "$SECLISTS_DIR/.git" ]; then
@@ -203,49 +191,31 @@ if [ "${SPARSE_OK:-0}" -ne 1 ]; then
   done
 fi
 
-# --------- [5/9] Prepare local wordlist folder ----------
-echo "[5/9] Prepare local wordlist folder: $WL_LOCAL"
+# --------- [7/9] Prepare local wordlist folder ----------
+echo "[7/9] Prepare local wordlist folder: $WL_LOCAL"
 mkdir -p "$WL_LOCAL"
 
-cp -n "$SECLISTS_DIR/Fuzzing/LFI/LFI-LFISuite-pathtotest.txt"        "$WL_LOCAL/lfi.txt"                      2>/dev/null || true
-cp -n "$SECLISTS_DIR/Fuzzing/Databases/SQLi/Generic-SQLi.txt"        "$WL_LOCAL/sqli.txt"                     2>/dev/null || true
-cp -n "$SECLISTS_DIR/Discovery/Web-Content/raft-large-directories.txt"   "$WL_LOCAL/raft-large-directories.txt"    2>/dev/null || true
-cp -n "$SECLISTS_DIR/Discovery/Web-Content/raft-medium-directories.txt"  "$WL_LOCAL/raft-medium-directories.txt"   2>/dev/null || true
-cp -n "$SECLISTS_DIR/Discovery/Web-Content/combined_directories.txt"     "$WL_LOCAL/combined_directories.txt"      2>/dev/null || true
-cp -n "$SECLISTS_DIR/Discovery/Web-Content/web-extensions.txt"      "$WL_LOCAL/web-extensions.txt"           2>/dev/null || true
-cp -n "$SECLISTS_DIR/Discovery/Web-Content/api/api-endpoints.txt"   "$WL_LOCAL/api-endpoints.txt"            2>/dev/null || true
-cp -n "$SECLISTS_DIR/Fuzzing/big-list-of-naughty-strings.txt"       "$WL_LOCAL/big-list-of-naughty-strings.txt" 2>/dev/null || true
-cp -n "$SECLISTS_DIR/Fuzzing/XSS/Polyglots/XSS-Polyglot-Ultimate-0xsobky.txt" "$WL_LOCAL/xss-polyglot-ultimate.txt" 2>/dev/null || true
-cp -n "$SECLISTS_DIR/Fuzzing/XSS/human-friendly/XSS-payloadbox.txt" "$WL_LOCAL/xss-payloadbox.txt"           2>/dev/null || true
+cp -n "$SECLISTS_DIR/Fuzzing/LFI/LFI-LFISuite-pathtotest.txt"                "$WL_LOCAL/lfi.txt"                        2>/dev/null || true
+cp -n "$SECLISTS_DIR/Fuzzing/Databases/SQLi/Generic-SQLi.txt"                "$WL_LOCAL/sqli.txt"                       2>/dev/null || true
+cp -n "$SECLISTS_DIR/Discovery/Web-Content/raft-large-directories.txt"      "$WL_LOCAL/raft-large-directories.txt"     2>/dev/null || true
+cp -n "$SECLISTS_DIR/Discovery/Web-Content/raft-medium-directories.txt"     "$WL_LOCAL/raft-medium-directories.txt"    2>/dev/null || true
+cp -n "$SECLISTS_DIR/Discovery/Web-Content/combined_directories.txt"        "$WL_LOCAL/combined_directories.txt"       2>/dev/null || true
+cp -n "$SECLISTS_DIR/Discovery/Web-Content/web-extensions.txt"              "$WL_LOCAL/web-extensions.txt"             2>/dev/null || true
+cp -n "$SECLISTS_DIR/Discovery/Web-Content/api/api-endpoints.txt"           "$WL_LOCAL/api-endpoints.txt"              2>/dev/null || true
+cp -n "$SECLISTS_DIR/Fuzzing/big-list-of-naughty-strings.txt"               "$WL_LOCAL/big-list-of-naughty-strings.txt" 2>/dev/null || true
+cp -n "$SECLISTS_DIR/Fuzzing/XSS/Polyglots/XSS-Polyglot-Ultimate-0xsobky.txt" "$WL_LOCAL/xss-polyglot-ultimate.txt"      2>/dev/null || true
+cp -n "$SECLISTS_DIR/Fuzzing/XSS/human-friendly/XSS-payloadbox.txt"         "$WL_LOCAL/xss-payloadbox.txt"             2>/dev/null || true
 
 echo "[i] Copied starter wordlists to $WL_LOCAL"
 
-# --------- [6/9] Optional install hunt.py globally ----------
-echo "[6/9] Optional: install hunt.py to /usr/local/bin for global use"
-if [ -f "./hunt.py" ]; then
-  read -r -p "Copy local ./hunt.py to /usr/local/bin/hunt and make executable? [y/N] " install_hunt || install_hunt="n"
-  if [[ "${install_hunt,,}" == "y" ]]; then
-    sudo cp -f ./hunt.py /usr/local/bin/hunt
-    sudo chmod +x /usr/local/bin/hunt
-    echo "[i] hunt installed to /usr/local/bin/hunt"
-  else
-    echo "[i] Skipping global install of hunt.py"
-  fi
-else
-  echo "[i] hunt.py not found in current dir; skipping"
-fi
-
-# --------- [7/9] Deploy Go binaries globally (/usr/local/bin) ----------
-echo "[7/9] Deploying recon tools to /usr/local/bin so they work everywhere"
+# --------- [8/9] Deploy Go binaries globally ----------
+echo "[8/9] Deploying recon tools to /usr/local/bin so they work everywhere"
 
 TOOLS=("subfinder" "httpx" "gau" "nuclei" "dnsx" "hakrawler" "assetfinder" "ffuf" "dalfox" "gf")
-
 for bin in "${TOOLS[@]}"; do
   SRC_BIN="${GOBIN}/${bin}"
   DST_BIN="/usr/local/bin/${bin}"
-
   if [ -f "$SRC_BIN" ]; then
-    # backup old if exists
     if [ -f "$DST_BIN" ]; then
       TS=$(date +%s)
       sudo cp "$DST_BIN" "${DST_BIN}.bak-${TS}" || true
@@ -260,12 +230,8 @@ for bin in "${TOOLS[@]}"; do
 done
 
 echo
-echo "[X/9] Installing xray ${XRAY_VERSION} -> ${XRAY_INSTALL_DIR}"
+echo "[8.5/9] Installing xray ${XRAY_VERSION} -> ${XRAY_INSTALL_DIR}"
 
-# deps kecil buat ekstrak
-sudo apt install -y unzip || true
-
-# siapkan folder
 sudo mkdir -p "${XRAY_INSTALL_DIR}"
 
 echo "[i] Downloading xray from ${XRAY_ZIP_URL}"
@@ -276,22 +242,17 @@ rm -rf "${XRAY_TMP_DIR}"
 mkdir -p "${XRAY_TMP_DIR}"
 unzip /tmp/xray_linux_amd64.zip -d "${XRAY_TMP_DIR}"
 
-# copy semua file hasil unzip ke /opt/xray
 sudo cp -r "${XRAY_TMP_DIR}"/* "${XRAY_INSTALL_DIR}/"
 
-# rename bin jadi 'xray' biar cakep
 if [ -f "${XRAY_INSTALL_DIR}/xray_linux_amd64" ]; then
   sudo mv "${XRAY_INSTALL_DIR}/xray_linux_amd64" "${XRAY_INSTALL_DIR}/xray"
 fi
 
-# permission & owner root
 sudo chown -R root:root "${XRAY_INSTALL_DIR}"
 sudo chmod -R 755 "${XRAY_INSTALL_DIR}"
 
-# bikin launcher global /usr/local/bin/xray
 sudo tee /usr/local/bin/xray >/dev/null << 'EOF'
 #!/bin/bash
-# Global launcher for xray: always run inside /opt/xray
 cd /opt/xray || {
     echo "[xray] /opt/xray not found."
     exit 1
@@ -303,8 +264,7 @@ sudo chmod +x /usr/local/bin/xray
 echo "[i] xray installed. Wrapper: $(which xray || echo 'not found')"
 
 echo
-echo "[X.5/9] Bootstrapping xray..."
-# pertama kali jalanin xray biar dia download config/pocs/ dll
+echo "[8.6/9] Bootstrapping xray..."
 xray --help || true
 xray webscan --url "http://127.0.0.1" --json-output /opt/xray/bootstrap-1.json || true
 xray webscan --url "http://127.0.0.1" --json-output /opt/xray/bootstrap-2.json || true
@@ -312,9 +272,9 @@ xray webscan --url "http://127.0.0.1" --json-output /opt/xray/bootstrap-2.json |
 echo "[i] xray directory after bootstrap:"
 sudo ls -R "${XRAY_INSTALL_DIR}" || true
 
-# --------- [8/9] Quick verification ----------
+# --------- [9/9] Quick verification & outro ----------
 echo
-echo "[8/9] Quick verification (binaries in PATH now?)"
+echo "[9/9] Quick verification (binaries in PATH now?)"
 which subfinder  || echo "WARN: subfinder not in PATH"
 which httpx      || echo "WARN: httpx not in PATH"
 which gau        || echo "WARN: gau not in PATH"
@@ -324,10 +284,10 @@ which ffuf       || echo "WARN: ffuf not in PATH"
 which dalfox     || echo "WARN: dalfox not in PATH"
 which gf         || echo "WARN: gf not in PATH"
 which sqlmap     || echo "WARN: sqlmap not in PATH"
+which xray       || echo "WARN: xray not in PATH"
 
-# --------- [9/9] Outro ----------
 echo
-echo "[9/9] Setup complete ✅"
+echo "Setup complete ✅"
 echo " - SecLists         : $SECLISTS_DIR"
 echo " - Local wordlists  : $WL_LOCAL"
 echo " - Go bin (GOBIN)   : $GOBIN"
