@@ -17,7 +17,7 @@
 ## instalasi tools  (local)
 
 
-# sudo su terlebih dahulu
+
 ```bash
 
 # 2) Clone repo & jalankan setup
