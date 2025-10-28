@@ -13,7 +13,7 @@
 ## Cepat mulai (local)
 ```bash
 
-git clone https://github.com/majelissholawatnuralathos-oss/Bug-Hunting.git
+git clone https://github.com/fajar23332/Bug-Hunting.git
 cd Bug-Hunting
 chmod +x setup.sh hunt.py
 ./setup.sh
