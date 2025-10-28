@@ -20,7 +20,10 @@
 
 ```bash
 
+
+
 # 1) Clone repo & jalankan setup
+sudo su
 git clone https://github.com/fajar23332/Bug-Hunting.git
 cd Bug-Hunting
 chmod +x setup.sh hunt.py
