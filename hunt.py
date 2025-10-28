@@ -2,7 +2,8 @@
 import os
 import subprocess
 import shutil
-from datetime import datetime
+import json
+import datetime
 from colorama import Fore, Style, init as colorama_init
 from pyfiglet import figlet_format
 from termcolor import colored
@@ -27,9 +28,9 @@ def banner():
     print(colored(title, "cyan"))
     print(Fore.MAGENTA + "    Bug Bounty Recon Console")
     print(Fore.MAGENTA + "    use with permission only 🚨\n")
-    print(Fore.YELLOW + "Temp dir     : ~/bug-hunting/bbp/<target>/")
-    print(Fore.YELLOW + "FullPower dir: ~/bug-hunting/fullpower/<target>/fullpower.json")
-    print(Fore.YELLOW + "Attack dir   : ~/bug-hunting/<bugtype>/<target>/result.json\n")
+    print(Fore.YELLOW + "Temp dir     : ~/bug-hunting/bbp/<target>/ (scan sementara .txt)")
+    print(Fore.YELLOW + "FullPower dir: ~/bug-hunting/fullpower/<target>/ (nuclei.txt + final.json)")
+    print(Fore.YELLOW + "Attack dir   : ~/bug-hunting/<bugtype>/<target>/ (bugtype.txt + result.json)\n")
 
 def menu():
     print(Fore.CYAN + "[0] FULL POWER (subfinder -> httpx -> nuclei)")
@@ -65,11 +66,7 @@ def ensure_dir(path):
 
 def run_cmd(cmd, cwd=None, shell=False):
     """Run command and stream output."""
-    if shell:
-        preview = cmd
-    else:
-        preview = " ".join(cmd)
-
+    preview = cmd if shell else " ".join(cmd)
     print(Fore.YELLOW + "\n[CMD] " + preview)
     print(Fore.YELLOW + "--------------------------------------------------\n")
     try:
@@ -81,6 +78,7 @@ def run_cmd(cmd, cwd=None, shell=False):
         print(Fore.RED + "\n[!] Aborted by user.\n")
     except Exception as e:
         print(Fore.RED + f"[!] Error running command: {e}\n")
+
 
 # ===== basic tool runners =====
 
@@ -106,11 +104,12 @@ def run_subfinder():
     run_cmd(cmd)
 
 def run_httpx():
+    # user kasih nama target (folder)
     target = ask("Target name (folder under bbp/, e.g. example.com)")
     tclean = sanitize_target_for_dir(target)
     temp_dir = os.path.join(BBP_BASE, tclean)
-    subs_path = os.path.join(temp_dir, "subs.txt")
 
+    subs_path = os.path.join(temp_dir, "subs.txt")
     if not os.path.isfile(subs_path):
         print(Fore.RED + f"[!] subs.txt not found at {subs_path}")
         subs_path = ask("Custom path to list for httpx -l")
@@ -261,6 +260,7 @@ def run_gf():
     list_path = ask("Path to list of URLs/params (e.g. ~/bug-hunting/bbp/target/gau.txt)")
     pattern = ask("gf pattern (xss,sqli,lfi,redirect,ssti,...)", default="xss")
 
+    # infer dir name: parent of the list file
     tclean = sanitize_target_for_dir(os.path.basename(os.path.dirname(list_path)))
     temp_dir = os.path.join(BBP_BASE, tclean)
     ensure_dir(temp_dir)
@@ -305,6 +305,7 @@ def run_dalfox():
     print(Fore.CYAN + f"\n[+] Output -> {out_file}")
     run_cmd(base_cmd, shell=True)
 
+
 # ===== FULL POWER MODE =====
 def run_fullpower():
     # ask target + threads
@@ -313,22 +314,23 @@ def run_fullpower():
 
     tclean = sanitize_target_for_dir(target)
 
-    temp_dir = os.path.join(BBP_BASE, tclean)
+    temp_dir = os.path.join(BBP_BASE, tclean)            # temp .txt
     ensure_dir(temp_dir)
 
-    final_dir = os.path.join(FULLPOWER_BASE, tclean)
+    final_dir = os.path.join(FULLPOWER_BASE, tclean)     # final folder
     ensure_dir(final_dir)
 
-    subs_file = os.path.join(temp_dir, "subs.txt")
-    httpx_file = os.path.join(temp_dir, "httpx.txt")
-    nuclei_out = os.path.join(final_dir, "fullpower.json")
+    subs_file    = os.path.join(temp_dir, "subs.txt")
+    httpx_file   = os.path.join(temp_dir, "httpx.txt")
+    nuclei_raw   = os.path.join(final_dir, "nuclei.txt")     # raw nuclei output (.txt)
+    final_report = os.path.join(final_dir, "final.json")     # summary json
 
-    timestamp = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
+    timestamp = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
     print(Fore.MAGENTA + f"\n[ FULL POWER @ {timestamp} ]")
     print(Fore.MAGENTA + f"Target   : {target}")
     print(Fore.MAGENTA + f"Temp dir : {temp_dir}")
-    print(Fore.MAGENTA + f"Final    : {nuclei_out}")
-    print(Fore.YELLOW  + "\nSubfinder -> httpx -> nuclei. Setelah selesai, file temp dihapus.\n")
+    print(Fore.MAGENTA + f"Final    : {final_dir}")
+    print(Fore.YELLOW  + "\nChain: subfinder -> httpx -> nuclei\n")
 
     # 1. subfinder
     cmd_subfinder = [
@@ -353,17 +355,33 @@ def run_fullpower():
     print(Fore.CYAN + "\n[2] httpx -> httpx.txt")
     run_cmd(cmd_httpx)
 
-    # 3. nuclei
+    # 3. nuclei (raw nuclei output jadi nuclei.txt)
     cmd_nuclei = [
         "nuclei",
         "-l", httpx_file,
         "-c", speed,
-        "-o", nuclei_out
+        "-o", nuclei_raw
     ]
-    print(Fore.CYAN + "\n[3] nuclei -> fullpower.json")
+    print(Fore.CYAN + "\n[3] nuclei -> nuclei.txt")
     run_cmd(cmd_nuclei)
 
-    # cleanup temp
+    # Build summary JSON (final.json)
+    summary = {
+        "target": target,
+        "timestamp_utc": timestamp,
+        "subdomains_file": subs_file,
+        "alive_hosts_file": httpx_file,
+        "nuclei_raw_file": nuclei_raw,
+        "note": "Raw scan outputs are in .txt, this is just metadata summary."
+    }
+    try:
+        with open(final_report, "w") as jf:
+            jf.write(json.dumps(summary, indent=2))
+        print(Fore.GREEN + f"[+] Wrote summary -> {final_report}")
+    except Exception as e:
+        print(Fore.RED + f"[!] Failed to write {final_report}: {e}")
+
+    # cleanup temp (subs.txt & httpx.txt) ONLY temp
     for f in [subs_file, httpx_file]:
         if os.path.isfile(f):
             try:
@@ -373,7 +391,9 @@ def run_fullpower():
                 print(Fore.RED + f"[!] failed to remove {f}")
 
     print(Fore.GREEN + "\n[✓] Full power finished.")
-    print(Fore.GREEN + f"    Report -> {nuclei_out}\n")
+    print(Fore.GREEN + f"    nuclei raw   -> {nuclei_raw}")
+    print(Fore.GREEN + f"    final report -> {final_report}\n")
+
 
 # ===== ATTACK FOCUS MODE =====
 def run_attack_focus():
@@ -384,39 +404,43 @@ def run_attack_focus():
 
     tclean = sanitize_target_for_dir(target)
 
-    # temp dir for work (bbp/<target>)
+    # temp dir for work (bbp/<target>) -> semua .txt sementara
     temp_dir = os.path.join(BBP_BASE, tclean)
     ensure_dir(temp_dir)
 
-    # final dir for this bugtype (~/bug-hunting/<bugtype>/<target>/)
+    # final dir for this bugtype
+    # ~/bug-hunting/<bugtype>/<target>/
     final_dir = os.path.join(ATTACK_BASE, bug_type, tclean)
     ensure_dir(final_dir)
 
-    gau_raw        = os.path.join(temp_dir, "gau_raw.txt")         # full crawl
-    focus_raw      = os.path.join(temp_dir, "focus_raw.txt")       # filtered by gf
-    focus_alive    = os.path.join(temp_dir, "focus_alive.txt")     # only live 200
-    result_file    = os.path.join(final_dir, "result.json")        # final report
+    # sementara
+    gau_raw     = os.path.join(temp_dir, "gau_raw.txt")      # full crawl
+    focus_raw   = os.path.join(temp_dir, "focus_raw.txt")    # filtered by gf
+    focus_alive = os.path.join(temp_dir, "focus_alive.txt")  # only live 200
+
+    # final
+    raw_report  = os.path.join(final_dir, f"{bug_type}.txt") # dalfox.txt/sqlmap.txt/nuclei.txt equivalent
+    result_json = os.path.join(final_dir, "result.json")     # summary metadata
 
     print(Fore.MAGENTA + "\n[ ATTACK FOCUS MODE ]")
-    print(Fore.MAGENTA + f"Target   : {target}")
-    print(Fore.MAGENTA + f"Bug type : {bug_type}")
-    print(Fore.MAGENTA + f"Temp dir : {temp_dir}")
-    print(Fore.MAGENTA + f"Final    : {result_file}")
-    print(Fore.YELLOW  + "\nChain: gau -> gf(filter by vuln type) -> httpx (live only) -> exploit tool\n")
+    print(Fore.MAGENTA + f"Target      : {target}")
+    print(Fore.MAGENTA + f"Bug type    : {bug_type}")
+    print(Fore.MAGENTA + f"Temp dir    : {temp_dir}")
+    print(Fore.MAGENTA + f"Final dir   : {final_dir}")
+    print(Fore.YELLOW  + "\nChain: gau -> gf(type filter) -> httpx(200) -> exploit tool\n")
 
-    # STEP 1: GAU (collect archive URLs / params)
+    # STEP 1: GAU
     shell_gau = f"gau --subs {target} | tee {gau_raw}"
     print(Fore.CYAN + "\n[1] gau -> gau_raw.txt")
     run_cmd(shell_gau, shell=True)
 
-    # STEP 2: GF FILTER (pick only interesting URLs for chosen vuln type)
-    # we'll map bug_type (xss/sqli/lfi) directly to gf pattern with same name
-    gf_pattern = bug_type  # expects gf xss / gf sqli / gf lfi to exist in ~/.gf
+    # STEP 2: GF FILTER
+    gf_pattern = bug_type  # expects xss/sqli/lfi/etc in ~/.gf
     shell_gf = f"cat {gau_raw} | gf {gf_pattern} | tee {focus_raw}"
     print(Fore.CYAN + "\n[2] gf -> focus_raw.txt")
     run_cmd(shell_gf, shell=True)
 
-    # STEP 3: HTTPX (only test filtered URLs, check which are actually alive 200)
+    # STEP 3: HTTPX -> only alive 200
     cmd_httpx = [
         "httpx",
         "-l", focus_raw,
@@ -428,41 +452,38 @@ def run_attack_focus():
     print(Fore.CYAN + "\n[3] httpx (200 only) -> focus_alive.txt")
     run_cmd(cmd_httpx)
 
-    # STEP 4: EXPLOIT TOOL
-    print(Fore.CYAN + "\n[4] exploitation -> result.json")
+    # STEP 4: EXPLOIT TOOL -> save RAW tool output into raw_report (.txt)
+    print(Fore.CYAN + "\n[4] exploitation -> raw_report (.txt)")
 
     if bug_type == "xss":
-        # dalfox against list
+        # dalfox
         payload_file = os.path.join(WL_BASE, "xss-payloadbox.txt")
         if not os.path.isfile(payload_file):
-            # fallback: still pass this path, user can adjust later
-            payload_file = payload_file
+            payload_file = payload_file  # fallback, user may adjust manually
 
-        # default: skip mining biar gak barbar
         shell_dalfox = (
             f"dalfox file {focus_alive} "
             f"--custom-payload {payload_file} "
             f"--worker {speed} "
             f"--skip-mining-all "
-            f"| tee {result_file}"
+            f"| tee {raw_report}"
         )
         run_cmd(shell_dalfox, shell=True)
 
     elif bug_type == "sqli":
-        # loop sqlmap safe mode for each URL in focus_alive
-        # we keep batch / risk=1 / level=1 / smart to stay 'legal-ish'
+        # sqlmap per URL
         shell_sqlmap = (
             "while read -r url; do "
             "echo '[*] Testing SQLi:' \"$url\"; "
             "sqlmap -u \"$url\" --batch --level=1 --risk=1 --random-agent --smart --flush-session; "
-            "done < " + focus_alive + " | tee " + result_file
+            "done < " + focus_alive + " | tee " + raw_report
         )
         run_cmd(shell_sqlmap, shell=True)
 
     elif bug_type == "lfi":
-        # nuclei scan potential LFI-style URLs only
+        # nuclei on possible LFI params
         shell_nuclei = (
-            f"nuclei -l {focus_alive} -c {speed} -o {result_file}"
+            f"nuclei -l {focus_alive} -c {speed} | tee {raw_report}"
         )
         run_cmd(shell_nuclei, shell=True)
 
@@ -470,7 +491,24 @@ def run_attack_focus():
         print(Fore.RED + f"[!] Unknown bug_type '{bug_type}'. Supported: xss / sqli / lfi")
         print(Fore.RED + "    Skipping exploit step.")
 
-    # STEP 5: CLEANUP TEMP FILES
+    # STEP 5: summary result.json
+    stamp = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
+    summary_data = {
+        "target": target,
+        "bug_type": bug_type,
+        "threads_used": speed,
+        "raw_output_file": raw_report,
+        "timestamp_utc": stamp,
+        "note": "raw_output_file is .txt with tool results; this JSON is just metadata."
+    }
+    try:
+        with open(result_json, "w") as jf:
+            jf.write(json.dumps(summary_data, indent=2))
+        print(Fore.GREEN + f"[+] Wrote final summary -> {result_json}")
+    except Exception as e:
+        print(Fore.RED + f"[!] Failed to write {result_json}: {e}")
+
+    # STEP 6: CLEANUP TEMP FILES (hanya sementara bbp)
     for f in [gau_raw, focus_raw, focus_alive]:
         if os.path.isfile(f):
             try:
@@ -480,8 +518,10 @@ def run_attack_focus():
                 print(Fore.RED + f"[!] failed to remove {f}")
 
     print(Fore.GREEN + "\n[✓] Attack focus finished.")
-    print(Fore.GREEN + f"    Final report -> {result_file}\n")
-    
+    print(Fore.GREEN + f"    Raw exploit log -> {raw_report}")
+    print(Fore.GREEN + f"    Summary JSON    -> {result_json}\n")
+
+
 # ===== main loop =====
 def main():
     while True:
