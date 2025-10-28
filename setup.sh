@@ -92,6 +92,37 @@ ls "$GF_DIR" || true
 # cleanup tmp
 rm -rf "$TOOLS_TMP" 2>/dev/null || true
 
+# ⬇⬇⬇ MASUKIN BLOCK BARU DI SINI
+echo
+echo "[3/9] Writing default gau config to \$HOME/.gau.toml"
+
+cat > "$HOME/.gau.toml" << 'EOF'
+threads = 2
+verbose = false
+retries = 15
+subdomains = false
+parameters = false
+providers = ["wayback","commoncrawl","otx","urlscan"]
+blacklist = ["ttf","woff","svg","png","jpg"]
+json = false
+
+[urlscan]
+  apikey = ""
+
+[filters]
+  from = ""
+  to = ""
+  matchstatuscodes = []
+  matchmimetypes = []
+  filterstatuscodes = []
+  filtermimetypes = ["image/png", "image/jpg", "image/svg+xml"]
+EOF
+
+echo "[i] gau config written to $HOME/.gau.toml"
+echo "[i] you can edit later for urlscan api key or threads"
+echo
+# ⬆⬆⬆ SAMPAI SINI
+
 
 # --------- [3/9] Python deps for hunt.py UI ----------
 echo "[3/9] Installing Python dependencies for hunt.py UI (colorama, pyfiglet, termcolor, tqdm)"
