@@ -95,9 +95,8 @@ rm -rf "$TOOLS_TMP" 2>/dev/null || true
 
 # --------- [3/9] Python deps for hunt.py UI ----------
 echo "[3/9] Installing Python dependencies for hunt.py UI (colorama, pyfiglet, termcolor, tqdm)"
-python3 -m pip install --user --upgrade pip
-python3 -m pip install --user colorama pyfiglet termcolor tqdm
-
+python3 -m pip install --user --upgrade pip --break-system-packages
+python3 -m pip install --user colorama pyfiglet termcolor tqdm --break-system-packages
 # ensure ~/.local/bin in PATH for this run (already exported above, but re-assert)
 export PATH="$HOME/.local/bin:$PATH"
 
