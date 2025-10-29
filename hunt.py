@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 import os
 import subprocess
+import sys
+import tkinter as tk
+from tkinter import messagebox
+import threading
 from datetime import datetime
 from colorama import Fore, Style, init as colorama_init
 from pyfiglet import figlet_format
@@ -877,3 +881,77 @@ def main_menu():
 
 if __name__ == "__main__":
     main_menu()
+
+
+
+# ──────────────────────────────── CLI launcher ────────────────────────────────
+def run_cli():
+    """Run the existing CLI version (default flow)."""
+    banner_main()
+    # panggil fungsi utama CLI lo di sini (menu CLI lo)
+    # contoh: show_main_menu() atau langsung run_fullpower(), dsb
+    # lo bisa ganti sesuai entry point CLI lo sekarang
+    print("CLI mode aktif ✅ (jalanin manual dari terminal)")
+
+# ──────────────────────────────── GUI launcher ────────────────────────────────
+def run_gui():
+    """Run GUI launcher for hunt toolkit."""
+    root = tk.Tk()
+    root.title("Hunt Toolkit 🐞")
+    root.geometry("420x420")
+    root.configure(bg="#1e1e1e")
+
+    title = tk.Label(root, text="HUNT TOOLKIT", fg="cyan", bg="#1e1e1e", font=("Consolas", 20, "bold"))
+    title.pack(pady=10)
+
+    desc = tk.Label(root, text="Choose your weapon ⚔️", fg="white", bg="#1e1e1e")
+    desc.pack(pady=5)
+
+    # tombol GUI
+    def run_cmd(cmd):
+        def _run():
+            try:
+                subprocess.run(cmd, shell=True)
+            except Exception as e:
+                messagebox.showerror("Error", str(e))
+        threading.Thread(target=_run).start()
+
+    buttons = [
+        ("Run Subfinder", "python3 hunt.py --cli subfinder"),
+        ("Run HTTPX", "python3 hunt.py --cli httpx"),
+        ("Run GAU", "python3 hunt.py --cli gau"),
+        ("Run Nuclei", "python3 hunt.py --cli nuclei"),
+        ("Run FullPower", "python3 hunt.py --cli fullpower"),
+        ("Run Attack Focus", "python3 hunt.py --cli attack"),
+        ("Exit", "exit")
+    ]
+
+    for label, cmd in buttons:
+        tk.Button(root, text=label, width=30, height=2, bg="#333", fg="white",
+                  command=(lambda c=cmd: run_cmd(c) if c != "exit" else root.destroy())
+                  ).pack(pady=5)
+
+    root.mainloop()
+if __name__ == "__main__":
+    if "--cli" in sys.argv:
+        # kalau CLI
+        if len(sys.argv) > 2:
+            mode = sys.argv[2]
+            if mode == "subfinder":
+                tool_subfinder()
+            elif mode == "httpx":
+                tool_httpx()
+            elif mode == "gau":
+                tool_gau()
+            elif mode == "nuclei":
+                tool_nuclei()
+            elif mode == "fullpower":
+                run_fullpower()
+            elif mode == "attack":
+                run_attack_focus()
+            else:
+                print("⚠️ Mode CLI tidak dikenal. Jalankan: python3 hunt.py --cli")
+        else:
+            run_cli()
+    else:
+        run_gui()
