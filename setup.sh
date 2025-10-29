@@ -1,135 +1,208 @@
 #!/usr/bin/env bash
+# setup-auto.sh — smarter setup: detect installed tools, install if missing, update if present
 set -euo pipefail
+IFS=$'\n\t'
 
 ME="$(basename "$0")"
-echo
-echo "=== $ME — Hunt Toolkit setup (clone SecLists + tools + python deps) ==="
-echo
+info(){ printf "\e[1;36m[%s]\e[0m %s\n" "$ME" "$*"; }
+warn(){ printf "\e[1;33m[%s] WARN:\e[0m %s\n" "$ME" "$*" >&2; }
+err(){ printf "\e[1;31m[%s] ERROR:\e[0m %s\n" "$ME" "$*" >&2; exit 1; }
 
-# --------- Config ----------
-SECLISTS_DIR="$HOME/Seclists/SecLists-master"
-WL_LOCAL="$HOME/Bug-Hunting/wordlist"
+# ---------- Config ----------
+HOME="${HOME:-/root}"
 GOBIN="${GOBIN:-$HOME/go/bin}"
 GOPATH="${GOPATH:-$HOME/go}"
 PATH_ADD_LINE='export PATH="/usr/local/go/bin:$HOME/go/bin:$HOME/.local/bin:$PATH"'
+PY_PKGS=(colorama pyfiglet termcolor tqdm)
+APT_PKGS=(git curl wget ca-certificates build-essential python3 python3-pip sqlmap unzip)
+GO_TOOLS=(
+  "github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest"
+  "github.com/projectdiscovery/httpx/cmd/httpx@latest"
+  "github.com/lc/gau/v2/cmd/gau@latest"
+  "github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest"
+  "github.com/projectdiscovery/dnsx/cmd/dnsx@latest"
+  "github.com/hakluke/hakrawler@latest"
+  "github.com/tomnomnom/assetfinder@latest"
+  "github.com/ffuf/ffuf@latest"
+  "github.com/hahwul/dalfox/v2@latest"
+  "github.com/tomnomnom/gf@latest"
+)
 
-# xray vars
-XRAY_VERSION="1.9.11"
-XRAY_ZIP_URL="https://github.com/chaitin/xray/releases/download/${XRAY_VERSION}/xray_linux_amd64.zip"
-XRAY_TMP_DIR="/tmp/xray-${XRAY_VERSION}"
-XRAY_INSTALL_DIR="/opt/xray"
+XRAY_VERSION="${XRAY_VERSION:-1.9.11}"
+ARCH="$(uname -m)"
+case "$ARCH" in
+  x86_64|amd64) XRAY_ASSET="xray_linux_amd64.zip" ;;
+  aarch64|arm64) XRAY_ASSET="xray_linux_arm64.zip" ;;
+  *) XRAY_ASSET="xray_linux_amd64.zip"; warn "unknown arch $ARCH: defaulting xray amd64";;
+esac
+XRAY_ZIP_URL="https://github.com/chaitin/xray/releases/download/${XRAY_VERSION}/${XRAY_ASSET}"
+XRAY_INSTALL_DIR="${XRAY_INSTALL_DIR:-/opt/xray}"
+XRAY_WRAPPER="/usr/local/bin/xray"
 
-# --------- [1/9] Update & essentials ----------
-echo "[1/9] apt update & install basics (git, curl, build tools, python, sqlmap)"
-sudo apt update -y
-sudo apt install -y git curl wget ca-certificates build-essential python3 python3-pip sqlmap unzip
+# ---------- helpers ----------
+cmd_exists(){ command -v "$1" >/dev/null 2>&1; }
+apt_installed(){ dpkg -s "$1" >/dev/null 2>&1 || return 1; }
+ensure_dir(){ mkdir -p "$1"; }
 
-# prepare GOBIN/GOPATH + PATH for current shell run
-mkdir -p "$GOBIN"
-export GOPATH="$GOPATH"
-export PATH="/usr/local/go/bin:$GOBIN:$HOME/.local/bin:$PATH"
+require_sudo(){
+  if [ "$EUID" -ne 0 ] && ! cmd_exists sudo; then
+    err "This script requires sudo but 'sudo' is not available. Run as root or install sudo."
+  fi
+}
 
-# persist PATH to .bashrc for future shells
-if ! grep -qxF "$PATH_ADD_LINE" "$HOME/.bashrc" 2>/dev/null; then
-  echo "$PATH_ADD_LINE" >> "$HOME/.bashrc"
-  echo "[i] Added go & pip user bin to ~/.bashrc (reload shell later to persist)"
-fi
+# ---------- 1) APT packages: install if missing, otherwise upgrade ---------- 
+install_apt_pkgs(){
+  info "Checking apt packages..."
+  sudo apt update -y
 
-# --------- [2/9] Go-based tools (install/update) ----------
-echo "[2/9] Installing/updating Go tools to $GOBIN"
-export GO111MODULE=on
+  local to_install=()
+  local to_upgrade=()
+  for p in "${APT_PKGS[@]}"; do
+    if apt_installed "$p"; then
+      to_upgrade+=("$p")
+    else
+      to_install+=("$p")
+    fi
+  done
 
-if ! command -v go >/dev/null 2>&1; then
-  echo "[!] 'go' not found in PATH. Skipping Go tool install."
-  echo "[!] Install Go first (lihat README), lalu jalankan ulang ./setup.sh"
-else
-  echo "[i] go detected: $(go version)"
-  echo "[i] Installing/updating recon tools..."
-  go install github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest || true
-  go install github.com/projectdiscovery/httpx/cmd/httpx@latest || true
-  go install github.com/lc/gau/v2/cmd/gau@latest || true
-  go install github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest || true
-  go install github.com/projectdiscovery/dnsx/cmd/dnsx@latest || true
-  go install github.com/hakluke/hakrawler@latest || true
-  go install github.com/tomnomnom/assetfinder@latest || true
-  go install github.com/ffuf/ffuf@latest || true
-  go install github.com/hahwul/dalfox/v2@latest || true
-  go install github.com/tomnomnom/gf@latest || true
-fi
+  if [ "${#to_install[@]}" -gt 0 ]; then
+    info "Installing missing apt packages: ${to_install[*]}"
+    sudo apt install -y "${to_install[@]}"
+  else
+    info "No missing apt packages."
+  fi
 
-echo "[i] Go tools install attempt finished."
-echo
+  if [ "${#to_upgrade[@]}" -gt 0 ]; then
+    info "Attempting to upgrade apt packages (only-upgrade): ${to_upgrade[*]}"
+    # apt supports --only-upgrade but fallback to normal install if not supported
+    sudo apt install --only-upgrade -y "${to_upgrade[@]}" || true
+  fi
+}
 
-# --------- [3/9] Setting up gf patterns (~/.gf) ----------
-echo "[3/9] Setting up gf patterns (~/.gf)"
+# ---------- 2) Ensure PATH persistence for go/pip user bin ----------
+ensure_path_persist(){
+  if ! grep -qxF "$PATH_ADD_LINE" "$HOME/.bashrc" 2>/dev/null; then
+    echo "$PATH_ADD_LINE" >> "$HOME/.bashrc"
+    info "Added go & pip user bin to ~/.bashrc (reload shell later)"
+  else
+    info "PATH already present in ~/.bashrc"
+  fi
+  ensure_dir "$GOBIN"
+  export PATH="/usr/local/go/bin:$GOBIN:$HOME/.local/bin:$PATH"
+}
 
-GF_DIR="$HOME/.gf"
-TOOLS_TMP="$HOME/.hunt-tmp-tools"
-GF_REPO_DIR="$TOOLS_TMP/gf"
-GFP_REPO_DIR="$TOOLS_TMP/Gf-Patterns"
+# ---------- 3) Python user packages (pip) ----------
+ensure_pip_pkgs(){
+  info "Checking Python user packages..."
+  for pkg in "${PY_PKGS[@]}"; do
+    if python3 -c "import importlib, sys; sys.exit(0 if importlib.util.find_spec('$pkg') else 1)" >/dev/null 2>&1; then
+      info "Python package '$pkg' present — upgrading to latest"
+      python3 -m pip install --user --upgrade "$pkg" || warn "pip upgrade failed for $pkg"
+    else
+      info "Installing python package '$pkg'"
+      python3 -m pip install --user "$pkg" || warn "pip install failed for $pkg"
+    fi
+  done
+  export PATH="$HOME/.local/bin:$PATH"
+}
 
-mkdir -p "$GF_DIR" "$TOOLS_TMP"
+# ---------- 4) Go tools: install if missing, update if exists ----------
+ensure_go_tools(){
+  if ! cmd_exists go; then
+    warn "'go' not in PATH. Skipping go tool installs. Install Go and re-run this script."
+    return
+  fi
+  info "Ensuring Go tools (install if missing, update if present)..."
+  export GO111MODULE=on
+  export GOBIN="$GOBIN"
+  mkdir -p "$GOBIN"
+  for pkg in "${GO_TOOLS[@]}"; do
+    # derive binary name from package path (best-effort)
+    binname="$(basename "${pkg%%@*}")"
+    BIN_PATH="$GOBIN/$binname"
+    if [ -f "$BIN_PATH" ]; then
+      info "Found $binname at $BIN_PATH → updating via go install $pkg"
+      go install "$pkg" || warn "go install (update) failed for $pkg"
+    else
+      info "$binname not found → installing via go install $pkg"
+      go install "$pkg" || warn "go install failed for $pkg"
+    fi
+  done
+}
 
-echo "[i] Cloning tomnomnom/gf for base patterns..."
-rm -rf "$GF_REPO_DIR" 2>/dev/null || true
-git clone --depth 1 https://github.com/tomnomnom/gf.git "$GF_REPO_DIR" 2>/dev/null || true
-if [ -d "$GF_REPO_DIR/examples" ]; then
-    cp -v "$GF_REPO_DIR/examples/"*.json "$GF_DIR"/ 2>/dev/null || true
-else
-    echo "[w] gf/examples not found, skipping base patterns."
-fi
+# ---------- 5) Deploy Go binaries to /usr/local/bin (only copy if missing or different) ----------
+deploy_go_bins(){
+  info "Deploying go binaries to /usr/local/bin (backup existing before replace)"
+  TOOLS=("subfinder" "httpx" "gau" "nuclei" "dnsx" "hakrawler" "assetfinder" "ffuf" "dalfox" "gf")
+  for bin in "${TOOLS[@]}"; do
+    SRC_BIN="${GOBIN}/${bin}"
+    DST_BIN="/usr/local/bin/${bin}"
+    if [ -f "$SRC_BIN" ]; then
+      if [ -f "$DST_BIN" ]; then
+        # check checksum to avoid redundant copy
+        if ! sudo cmp --silent "$SRC_BIN" "$DST_BIN"; then
+          TS=$(date +%s)
+          sudo mv "$DST_BIN" "${DST_BIN}.bak-${TS}" || true
+          info "Backing up $DST_BIN -> ${DST_BIN}.bak-${TS}"
+          sudo install -m 0755 "$SRC_BIN" "$DST_BIN"
+          info "Updated $DST_BIN"
+        else
+          info "$DST_BIN is up-to-date — skipping"
+        fi
+      else
+        sudo install -m 0755 "$SRC_BIN" "$DST_BIN"
+        info "Installed $DST_BIN"
+      fi
+    else
+      warn "Source $SRC_BIN not found (skip deploy)."
+    fi
+  done
+}
 
-echo "[i] Cloning 1ndianl33t/Gf-Patterns for vuln patterns (xss/sqli/lfi/ssrf/etc)..."
-rm -rf "$GFP_REPO_DIR" 2>/dev/null || true
-git clone --depth 1 https://github.com/1ndianl33t/Gf-Patterns.git "$GFP_REPO_DIR" 2>/dev/null || true
-if [ -d "$GFP_REPO_DIR" ]; then
-    cp -v "$GFP_REPO_DIR/"*.json "$GF_DIR"/ 2>/dev/null || true
-else
-    echo "[w] Gf-Patterns clone failed, skipping community patterns."
-fi
+# ---------- 6) Xray install/update (archive-based) ----------
+ensure_xray(){
+  info "Checking xray installation..."
+  if [ -x "$XRAY_WRAPPER" ] || [ -x "${XRAY_INSTALL_DIR}/xray" ]; then
+    info "xray present — will attempt to update by fetching latest release ${XRAY_VERSION}"
+  else
+    info "xray not present — will install ${XRAY_VERSION}"
+  fi
 
-echo "[i] Final ~/.gf patterns:"
-ls "$GF_DIR" || true
-rm -rf "$TOOLS_TMP" 2>/dev/null || true
-
-# --------- [4/9] gau config ----------
-echo "[4/9] Writing default gau config to \$HOME/.gau.toml"
-cat > "$HOME/.gau.toml" << 'EOF'
-threads = 2
-verbose = false
-retries = 15
-subdomains = false
-parameters = false
-providers = ["wayback","commoncrawl","otx","urlscan"]
-blacklist = ["ttf","woff","svg","png","jpg"]
-json = false
-
-[urlscan]
-  apikey = ""
-
-[filters]
-  from = ""
-  to = ""
-  matchstatuscodes = []
-  matchmimetypes = []
-  filterstatuscodes = []
-  filtermimetypes = ["image/png", "image/jpg", "image/svg+xml"]
+  TMPZIP="/tmp/${XRAY_ASSET}"
+  mkdir -p /tmp
+  if wget -q -O "$TMPZIP" "$XRAY_ZIP_URL"; then
+    info "Downloaded xray asset $TMPZIP"
+    TMPDIR="$(mktemp -d)"
+    unzip -q "$TMPZIP" -d "$TMPDIR"
+    sudo mkdir -p "${XRAY_INSTALL_DIR}"
+    sudo cp -r "${TMPDIR}/"* "${XRAY_INSTALL_DIR}/"
+    # rename binary if necessary
+    if [ -f "${XRAY_INSTALL_DIR}/xray_linux_amd64" ]; then
+      sudo mv -f "${XRAY_INSTALL_DIR}/xray_linux_amd64" "${XRAY_INSTALL_DIR}/xray" || true
+    fi
+    sudo chown -R root:root "${XRAY_INSTALL_DIR}"
+    sudo chmod -R 755 "${XRAY_INSTALL_DIR}"
+    # wrapper
+    sudo tee "$XRAY_WRAPPER" >/dev/null <<'EOF'
+#!/bin/bash
+cd /opt/xray || { echo "[xray] /opt/xray not found."; exit 1; }
+exec ./xray "$@"
 EOF
-echo "[i] gau config written to $HOME/.gau.toml"
-echo "[i] you can edit later for urlscan api key or threads"
-echo
+    sudo chmod +x "$XRAY_WRAPPER"
+    rm -rf "$TMPDIR" "$TMPZIP"
+    info "xray installed/updated at ${XRAY_INSTALL_DIR} (wrapper: $XRAY_WRAPPER)"
+  else
+    warn "Failed to download xray from $XRAY_ZIP_URL"
+  fi
+}
 
-# --------- [5/9] Python deps for hunt.py UI ----------
-echo "[5/9] Installing Python dependencies for hunt.py UI (colorama, pyfiglet, termcolor, tqdm)"
-python3 -m pip install --user --upgrade pip --break-system-packages
-python3 -m pip install --user colorama pyfiglet termcolor tqdm --break-system-packages
-export PATH="$HOME/.local/bin:$PATH"
-
-# --------- [6/9] Fetch SecLists subset ----------
-echo "[6/9] Fetch SecLists subset (sparse-checkout preferred)"
-mkdir -p "$(dirname "$SECLISTS_DIR")"
-
-read -r -d '' SECLISTS_PATHS <<'PATHS' || true
+# ---------- 7) SecLists subset (sparse or raw) ----------
+fetch_seclists_subset(){
+  SECLISTS_DIR="${SECLISTS_DIR:-$HOME/Seclists/SecLists-master}"
+  info "Fetching SecLists subset into $SECLISTS_DIR (sparse preferred)"
+  TOOLS_TMP="${TOOLS_TMP:-$HOME/.hunt-tmp-tools}"
+  ensure_dir "$TOOLS_TMP"
+  read -r -d '' SECLISTS_PATHS <<'PATHS' || true
 Discovery/Web-Content/raft-large-directories.txt
 Discovery/Web-Content/raft-medium-directories.txt
 Discovery/Web-Content/combined_directories.txt
@@ -142,164 +215,57 @@ Fuzzing/Databases/SQLi/Generic-SQLi.txt
 Fuzzing/LFI/LFI-LFISuite-pathtotest.txt
 PATHS
 
-if [ ! -d "$SECLISTS_DIR/.git" ]; then
-  echo "[i] Initializing sparse clone of SecLists into $SECLISTS_DIR"
-  git clone --depth 1 --no-checkout https://github.com/danielmiessler/SecLists.git "$SECLISTS_DIR" || {
-    echo "[w] sparse clone failed; falling back to raw download mode"
-    SPARSE_OK=0
-  }
-  if command -v git >/dev/null 2>&1 && [ -d "$SECLISTS_DIR/.git" ]; then
-    cd "$SECLISTS_DIR"
-    git sparse-checkout init --cone >/dev/null 2>&1 || true
-    readarray -t _paths <<< "$SECLISTS_PATHS"
-    git sparse-checkout set "${_paths[@]}" >/dev/null 2>&1 || true
-    git checkout --quiet || true
-    SPARSE_OK=1
-    echo "[i] Sparse-checkout applied."
-  else
-    SPARSE_OK=0
+  if cmd_exists git; then
+    if [ ! -d "$SECLISTS_DIR/.git" ]; then
+      git clone --depth 1 --no-checkout https://github.com/danielmiessler/SecLists.git "$SECLISTS_DIR" || warn "git clone SecLists failed"
+    fi
+    if [ -d "$SECLISTS_DIR/.git" ]; then
+      cd "$SECLISTS_DIR"
+      git sparse-checkout init --cone >/dev/null 2>&1 || true
+      readarray -t _paths <<< "$SECLISTS_PATHS"
+      git sparse-checkout set "${_paths[@]}" >/dev/null 2>&1 || true
+      git checkout --quiet || true
+      info "SecLists sparse-checkout applied."
+      return
+    fi
   fi
-else
-  echo "[i] SecLists repo skeleton exists at $SECLISTS_DIR — updating subset"
-  cd "$SECLISTS_DIR"
-  git sparse-checkout init --cone >/dev/null 2>&1 || true
-  readarray -t _paths <<< "$SECLISTS_PATHS"
-  git sparse-checkout set "${_paths[@]}" >/dev/null 2>&1 || true
-  git pull --ff-only || true
-  SPARSE_OK=1
-fi
 
-if [ "${SPARSE_OK:-0}" -ne 1 ]; then
-  echo "[!] Sparse-checkout not available. Falling back to raw per-file download."
+  # fallback per-file raw download
   mkdir -p "$SECLISTS_DIR"
   REPO_USER="danielmiessler"
   REPO_NAME="SecLists"
-  BRANCH="master"
-  readarray -t _paths <<< "$SECLISTS_PATHS"
-  for p in "${_paths[@]}"; do
-    out="$SECLISTS_DIR/$p"
-    outdir="$(dirname "$out")"
-    mkdir -p "$outdir"
-    url="https://raw.githubusercontent.com/${REPO_USER}/${REPO_NAME}/${BRANCH}/${p}"
-    echo "[i] Downloading $p"
-    if curl -sSfL "$url" -o "$out"; then
-      echo "    saved: $out"
-    else
-      echo "    warn: failed to download $p (skipping)"
-      rm -f "$out"
-    fi
+  BRANCHES_TO_TRY=("main" "master")
+  for BR in "${BRANCHES_TO_TRY[@]}"; do
+    for p in $(echo "$SECLISTS_PATHS"); do
+      out="$SECLISTS_DIR/$p"
+      outdir="$(dirname "$out")"
+      mkdir -p "$outdir"
+      url="https://raw.githubusercontent.com/${REPO_USER}/${REPO_NAME}/${BR}/${p}"
+      info "Downloading $p from $BR"
+      if curl -sSfL "$url" -o "$out"; then
+        info "saved: $out"
+      else
+        warn "failed to download $p from $BR"
+        rm -f "$out"
+      fi
+    done
+    # stop after successful branch attempt
+    if find "$SECLISTS_DIR" -type f | read; then break; fi
   done
-fi
-
-# --------- [7/9] Prepare local wordlist folder ----------
-echo "[7/9] Prepare local wordlist folder: $WL_LOCAL"
-mkdir -p "$WL_LOCAL"
-
-cp -n "$SECLISTS_DIR/Fuzzing/LFI/LFI-LFISuite-pathtotest.txt"                "$WL_LOCAL/lfi.txt"                        2>/dev/null || true
-cp -n "$SECLISTS_DIR/Fuzzing/Databases/SQLi/Generic-SQLi.txt"                "$WL_LOCAL/sqli.txt"                       2>/dev/null || true
-cp -n "$SECLISTS_DIR/Discovery/Web-Content/raft-large-directories.txt"      "$WL_LOCAL/raft-large-directories.txt"     2>/dev/null || true
-cp -n "$SECLISTS_DIR/Discovery/Web-Content/raft-medium-directories.txt"     "$WL_LOCAL/raft-medium-directories.txt"    2>/dev/null || true
-cp -n "$SECLISTS_DIR/Discovery/Web-Content/combined_directories.txt"        "$WL_LOCAL/combined_directories.txt"       2>/dev/null || true
-cp -n "$SECLISTS_DIR/Discovery/Web-Content/web-extensions.txt"              "$WL_LOCAL/web-extensions.txt"             2>/dev/null || true
-cp -n "$SECLISTS_DIR/Discovery/Web-Content/api/api-endpoints.txt"           "$WL_LOCAL/api-endpoints.txt"              2>/dev/null || true
-cp -n "$SECLISTS_DIR/Fuzzing/big-list-of-naughty-strings.txt"               "$WL_LOCAL/big-list-of-naughty-strings.txt" 2>/dev/null || true
-cp -n "$SECLISTS_DIR/Fuzzing/XSS/Polyglots/XSS-Polyglot-Ultimate-0xsobky.txt" "$WL_LOCAL/xss-polyglot-ultimate.txt"      2>/dev/null || true
-cp -n "$SECLISTS_DIR/Fuzzing/XSS/human-friendly/XSS-payloadbox.txt"         "$WL_LOCAL/xss-payloadbox.txt"             2>/dev/null || true
-
-echo "[i] Copied starter wordlists to $WL_LOCAL"
-
-# --------- [8/9] Deploy Go binaries globally ----------
-echo "[8/9] Deploying recon tools to /usr/local/bin so they work everywhere"
-
-TOOLS=("subfinder" "httpx" "gau" "nuclei" "dnsx" "hakrawler" "assetfinder" "ffuf" "dalfox" "gf")
-for bin in "${TOOLS[@]}"; do
-  SRC_BIN="${GOBIN}/${bin}"
-  DST_BIN="/usr/local/bin/${bin}"
-  if [ -f "$SRC_BIN" ]; then
-    if [ -f "$DST_BIN" ]; then
-      TS=$(date +%s)
-      sudo cp "$DST_BIN" "${DST_BIN}.bak-${TS}" || true
-      echo "[i] Backup existing ${DST_BIN} -> ${DST_BIN}.bak-${TS}"
-    fi
-    echo "[i] Installing $bin -> /usr/local/bin/$bin"
-    sudo cp "$SRC_BIN" "$DST_BIN"
-    sudo chmod 755 "$DST_BIN"
-  else
-    echo "[w] $bin not found in $SRC_BIN (maybe Go install failed / Go missing)"
-  fi
-done
-
-echo
-echo "[8.5/9] Installing xray ${XRAY_VERSION} -> ${XRAY_INSTALL_DIR}"
-
-sudo mkdir -p "${XRAY_INSTALL_DIR}"
-
-echo "[i] Downloading xray from ${XRAY_ZIP_URL}"
-cd /tmp
-wget -O xray_linux_amd64.zip "${XRAY_ZIP_URL}"
-
-rm -rf "${XRAY_TMP_DIR}"
-mkdir -p "${XRAY_TMP_DIR}"
-unzip /tmp/xray_linux_amd64.zip -d "${XRAY_TMP_DIR}"
-
-sudo cp -r "${XRAY_TMP_DIR}"/* "${XRAY_INSTALL_DIR}/"
-
-if [ -f "${XRAY_INSTALL_DIR}/xray_linux_amd64" ]; then
-  sudo mv "${XRAY_INSTALL_DIR}/xray_linux_amd64" "${XRAY_INSTALL_DIR}/xray"
-fi
-
-sudo chown -R root:root "${XRAY_INSTALL_DIR}"
-sudo chmod -R 755 "${XRAY_INSTALL_DIR}"
-
-sudo tee /usr/local/bin/xray >/dev/null << 'EOF'
-#!/bin/bash
-cd /opt/xray || {
-    echo "[xray] /opt/xray not found."
-    exit 1
 }
-exec ./xray "$@"
-EOF
 
-sudo chmod +x /usr/local/bin/xray
-echo "[i] xray installed. Wrapper: $(which xray || echo 'not found')"
+# ---------- main ----------
+main(){
+  require_sudo
+  install_apt_pkgs
+  ensure_path_persist
+  ensure_pip_pkgs
+  ensure_go_tools
+  deploy_go_bins
+  ensure_xray
+  fetch_seclists_subset
 
-echo
-echo "[8.6/9] Bootstrapping xray..."
-xray --help || true
-xray webscan --url "http://127.0.0.1" --json-output /opt/xray/bootstrap-1.json || true
-xray webscan --url "http://127.0.0.1" --json-output /opt/xray/bootstrap-2.json || true
+  info "All done. Reload shell (source ~/.bashrc) if needed."
+}
 
-echo "[i] xray directory after bootstrap:"
-sudo ls -R "${XRAY_INSTALL_DIR}" || true
-
-# --------- [9/9] Quick verification & outro ----------
-echo
-echo "[9/9] Quick verification (binaries in PATH now?)"
-which subfinder  || echo "WARN: subfinder not in PATH"
-which httpx      || echo "WARN: httpx not in PATH"
-which gau        || echo "WARN: gau not in PATH"
-which nuclei     || echo "WARN: nuclei not in PATH"
-which hakrawler  || echo "WARN: hakrawler not in PATH"
-which ffuf       || echo "WARN: ffuf not in PATH"
-which dalfox     || echo "WARN: dalfox not in PATH"
-which gf         || echo "WARN: gf not in PATH"
-which sqlmap     || echo "WARN: sqlmap not in PATH"
-which xray       || echo "WARN: xray not in PATH"
-
-echo
-echo "Setup complete ✅"
-echo " - SecLists         : $SECLISTS_DIR"
-echo " - Local wordlists  : $WL_LOCAL"
-echo " - Go bin (GOBIN)   : $GOBIN"
-echo
-echo "You can now run: 'hunt' (if you installed it) or 'python3 hunt.py'"
-echo
-echo "Full-power recon output dir:"
-echo "  ~/bug-hunting/fullpower/<target>/fullpower.json"
-echo
-echo "Attack-focus output dir:"
-echo "  ~/bug-hunting/<bugtype>/<target>/result.json"
-echo
-echo "[i] If some tool says 'command not found', re-check Go install or rerun setup after installing Go."
-echo
-exit 0
+main "$@"
