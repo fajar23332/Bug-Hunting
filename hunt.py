@@ -1035,3 +1035,24 @@ if __name__ == "__main__":
             run_cli()
     else:
         run_gui()
+
+
+print(Fore.CYAN + "\n[2] httpx -> fallback to root URL (-u)")
+            run_httpx_with_url(f"https://{target}", httpx_file)
+            if not file_has_lines(httpx_file) and try_both_schemes:
+                print(Fore.YELLOW + "[!] https returned no live endpoints, trying http://")
+                run_httpx_with_url(f"http://{target}", httpx_file)
+
+# check httpx result
+    if file_has_lines(httpx_file):
+        live_count = len(read_lines(httpx_file))
+        print(Fore.YELLOW + f"[+] httpx produced {live_count} live endpoints")
+    else:
+        print(Fore.YELLOW + "[!] httpx produced 0 live endpoints")
+
+    # ---------- 3) nuclei (choose -l or -u) ----------
+    print(Fore.CYAN + "\n[3] nuclei -> final scan")
+    nuclei_cmd_base = ["nuclei"]
+    if len(nuclei_sev) > 0:
+        nuclei_cmd_base += ["-severity", ",".join(nuclei_sev)]
+    nuclei_cmd_base += ["-o", nuclei_file]
