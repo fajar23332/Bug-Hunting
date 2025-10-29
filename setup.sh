@@ -1,5 +1,14 @@
 #!/usr/bin/env bash
 # setup-auto.sh — smarter setup: detect installed tools, install if missing, update if present
+
+run_sudo(){
+  if [ "$EUID" -eq 0 ]; then
+    "$@"
+  else
+    sudo "$@"
+  fi
+}
+
 set -euo pipefail
 IFS=$'\n\t'
 
@@ -50,10 +59,10 @@ require_sudo(){
   fi
 }
 
-# ---------- 1) APT packages: install if missing, otherwise upgrade ---------- 
+# ---------- 1) APT ----------
 install_apt_pkgs(){
   info "Checking apt packages..."
-  sudo apt update -y
+  run_sudo apt update -y
 
   local to_install=()
   local to_upgrade=()
@@ -66,142 +75,128 @@ install_apt_pkgs(){
   done
 
   if [ "${#to_install[@]}" -gt 0 ]; then
-    info "Installing missing apt packages: ${to_install[*]}"
-    sudo apt install -y "${to_install[@]}"
+    info "Installing missing: ${to_install[*]}"
+    run_sudo apt install -y "${to_install[@]}"
   else
-    info "No missing apt packages."
+    info "All apt packages already present."
   fi
 
   if [ "${#to_upgrade[@]}" -gt 0 ]; then
-    info "Attempting to upgrade apt packages (only-upgrade): ${to_upgrade[*]}"
-    # apt supports --only-upgrade but fallback to normal install if not supported
-    sudo apt install --only-upgrade -y "${to_upgrade[@]}" || true
+    info "Upgrading existing packages: ${to_upgrade[*]}"
+    run_sudo apt install --only-upgrade -y "${to_upgrade[@]}" || true
   fi
 }
 
-# ---------- 2) Ensure PATH persistence for go/pip user bin ----------
+# ---------- 2) PATH ----------
 ensure_path_persist(){
   if ! grep -qxF "$PATH_ADD_LINE" "$HOME/.bashrc" 2>/dev/null; then
     echo "$PATH_ADD_LINE" >> "$HOME/.bashrc"
-    info "Added go & pip user bin to ~/.bashrc (reload shell later)"
+    info "Added go & pip user bin to ~/.bashrc"
   else
-    info "PATH already present in ~/.bashrc"
+    info "PATH already configured"
   fi
   ensure_dir "$GOBIN"
   export PATH="/usr/local/go/bin:$GOBIN:$HOME/.local/bin:$PATH"
 }
 
-# ---------- 3) Python user packages (pip) ----------
+# ---------- 3) PYTHON ----------
 ensure_pip_pkgs(){
-  info "Checking Python user packages..."
+  info "Checking Python packages..."
   for pkg in "${PY_PKGS[@]}"; do
     if python3 -c "import importlib, sys; sys.exit(0 if importlib.util.find_spec('$pkg') else 1)" >/dev/null 2>&1; then
-      info "Python package '$pkg' present — upgrading to latest"
-      python3 -m pip install --user --upgrade "$pkg" || warn "pip upgrade failed for $pkg"
+      info "Updating $pkg"
+      python3 -m pip install --user --upgrade "$pkg" || warn "Upgrade failed for $pkg"
     else
-      info "Installing python package '$pkg'"
-      python3 -m pip install --user "$pkg" || warn "pip install failed for $pkg"
+      info "Installing $pkg"
+      python3 -m pip install --user "$pkg" || warn "Install failed for $pkg"
     fi
   done
   export PATH="$HOME/.local/bin:$PATH"
 }
 
-# ---------- 4) Go tools: install if missing, update if exists ----------
+# ---------- 4) GO ----------
 ensure_go_tools(){
   if ! cmd_exists go; then
-    warn "'go' not in PATH. Skipping go tool installs. Install Go and re-run this script."
+    warn "'go' not found — skip Go installs."
     return
   fi
-  info "Ensuring Go tools (install if missing, update if present)..."
+  info "Ensuring Go tools..."
   export GO111MODULE=on
   export GOBIN="$GOBIN"
   mkdir -p "$GOBIN"
   for pkg in "${GO_TOOLS[@]}"; do
-    # derive binary name from package path (best-effort)
     binname="$(basename "${pkg%%@*}")"
     BIN_PATH="$GOBIN/$binname"
     if [ -f "$BIN_PATH" ]; then
-      info "Found $binname at $BIN_PATH → updating via go install $pkg"
-      go install "$pkg" || warn "go install (update) failed for $pkg"
+      info "Updating $binname"
+      go install "$pkg" || warn "Update failed for $pkg"
     else
-      info "$binname not found → installing via go install $pkg"
-      go install "$pkg" || warn "go install failed for $pkg"
+      info "Installing $binname"
+      go install "$pkg" || warn "Install failed for $pkg"
     fi
   done
 }
 
-# ---------- 5) Deploy Go binaries to /usr/local/bin (only copy if missing or different) ----------
+# ---------- 5) Deploy ----------
 deploy_go_bins(){
-  info "Deploying go binaries to /usr/local/bin (backup existing before replace)"
+  info "Deploying Go binaries..."
   TOOLS=("subfinder" "httpx" "gau" "nuclei" "dnsx" "hakrawler" "assetfinder" "ffuf" "dalfox" "gf")
   for bin in "${TOOLS[@]}"; do
-    SRC_BIN="${GOBIN}/${bin}"
-    DST_BIN="/usr/local/bin/${bin}"
-    if [ -f "$SRC_BIN" ]; then
-      if [ -f "$DST_BIN" ]; then
-        # check checksum to avoid redundant copy
-        if ! sudo cmp --silent "$SRC_BIN" "$DST_BIN"; then
+    SRC="${GOBIN}/${bin}"
+    DST="/usr/local/bin/${bin}"
+    if [ -f "$SRC" ]; then
+      if [ -f "$DST" ]; then
+        if ! run_sudo cmp --silent "$SRC" "$DST"; then
           TS=$(date +%s)
-          sudo mv "$DST_BIN" "${DST_BIN}.bak-${TS}" || true
-          info "Backing up $DST_BIN -> ${DST_BIN}.bak-${TS}"
-          sudo install -m 0755 "$SRC_BIN" "$DST_BIN"
-          info "Updated $DST_BIN"
+          run_sudo mv "$DST" "${DST}.bak-${TS}" || true
+          info "Backup $DST → ${DST}.bak-${TS}"
+          run_sudo install -m 0755 "$SRC" "$DST"
+          info "Updated $DST"
         else
-          info "$DST_BIN is up-to-date — skipping"
+          info "$DST already latest."
         fi
       else
-        sudo install -m 0755 "$SRC_BIN" "$DST_BIN"
-        info "Installed $DST_BIN"
+        run_sudo install -m 0755 "$SRC" "$DST"
+        info "Installed $DST"
       fi
     else
-      warn "Source $SRC_BIN not found (skip deploy)."
+      warn "Missing binary $SRC"
     fi
   done
 }
 
-# ---------- 6) Xray install/update (archive-based) ----------
+# ---------- 6) XRAY ----------
 ensure_xray(){
-  info "Checking xray installation..."
-  if [ -x "$XRAY_WRAPPER" ] || [ -x "${XRAY_INSTALL_DIR}/xray" ]; then
-    info "xray present — will attempt to update by fetching latest release ${XRAY_VERSION}"
-  else
-    info "xray not present — will install ${XRAY_VERSION}"
-  fi
-
+  info "Checking XRAY..."
   TMPZIP="/tmp/${XRAY_ASSET}"
-  mkdir -p /tmp
+  run_sudo mkdir -p /tmp
   if wget -q -O "$TMPZIP" "$XRAY_ZIP_URL"; then
-    info "Downloaded xray asset $TMPZIP"
+    info "Downloaded $XRAY_ASSET"
     TMPDIR="$(mktemp -d)"
     unzip -q "$TMPZIP" -d "$TMPDIR"
-    sudo mkdir -p "${XRAY_INSTALL_DIR}"
-    sudo cp -r "${TMPDIR}/"* "${XRAY_INSTALL_DIR}/"
-    # rename binary if necessary
+    run_sudo mkdir -p "$XRAY_INSTALL_DIR"
+    run_sudo cp -r "$TMPDIR"/* "$XRAY_INSTALL_DIR"/
     if [ -f "${XRAY_INSTALL_DIR}/xray_linux_amd64" ]; then
-      sudo mv -f "${XRAY_INSTALL_DIR}/xray_linux_amd64" "${XRAY_INSTALL_DIR}/xray" || true
+      run_sudo mv "${XRAY_INSTALL_DIR}/xray_linux_amd64" "${XRAY_INSTALL_DIR}/xray" || true
     fi
-    sudo chown -R root:root "${XRAY_INSTALL_DIR}"
-    sudo chmod -R 755 "${XRAY_INSTALL_DIR}"
-    # wrapper
-    sudo tee "$XRAY_WRAPPER" >/dev/null <<'EOF'
+    run_sudo tee "$XRAY_WRAPPER" >/dev/null <<'EOF'
 #!/bin/bash
 cd /opt/xray || { echo "[xray] /opt/xray not found."; exit 1; }
 exec ./xray "$@"
 EOF
-    sudo chmod +x "$XRAY_WRAPPER"
+    run_sudo chmod +x "$XRAY_WRAPPER"
     rm -rf "$TMPDIR" "$TMPZIP"
-    info "xray installed/updated at ${XRAY_INSTALL_DIR} (wrapper: $XRAY_WRAPPER)"
+    info "xray ready at ${XRAY_INSTALL_DIR}"
   else
     warn "Failed to download xray from $XRAY_ZIP_URL"
   fi
 }
 
-# ---------- 7) SecLists subset (sparse or raw) ----------
+# ---------- 7) SECLISTS ----------
 fetch_seclists_subset(){
   SECLISTS_DIR="${SECLISTS_DIR:-$HOME/Seclists/SecLists-master}"
-  info "Fetching SecLists subset into $SECLISTS_DIR (sparse preferred)"
-  TOOLS_TMP="${TOOLS_TMP:-$HOME/.hunt-tmp-tools}"
-  ensure_dir "$TOOLS_TMP"
+  info "Fetching SecLists subset..."
+  ensure_dir "$SECLISTS_DIR"
   read -r -d '' SECLISTS_PATHS <<'PATHS' || true
 Discovery/Web-Content/raft-large-directories.txt
 Discovery/Web-Content/raft-medium-directories.txt
@@ -217,7 +212,7 @@ PATHS
 
   if cmd_exists git; then
     if [ ! -d "$SECLISTS_DIR/.git" ]; then
-      git clone --depth 1 --no-checkout https://github.com/danielmiessler/SecLists.git "$SECLISTS_DIR" || warn "git clone SecLists failed"
+      git clone --depth 1 --no-checkout https://github.com/danielmiessler/SecLists.git "$SECLISTS_DIR" || warn "git clone failed"
     fi
     if [ -d "$SECLISTS_DIR/.git" ]; then
       cd "$SECLISTS_DIR"
@@ -230,28 +225,20 @@ PATHS
     fi
   fi
 
-  # fallback per-file raw download
-  mkdir -p "$SECLISTS_DIR"
-  REPO_USER="danielmiessler"
-  REPO_NAME="SecLists"
-  BRANCHES_TO_TRY=("main" "master")
-  for BR in "${BRANCHES_TO_TRY[@]}"; do
-    for p in $(echo "$SECLISTS_PATHS"); do
-      out="$SECLISTS_DIR/$p"
-      outdir="$(dirname "$out")"
-      mkdir -p "$outdir"
-      url="https://raw.githubusercontent.com/${REPO_USER}/${REPO_NAME}/${BR}/${p}"
-      info "Downloading $p from $BR"
+  info "Git not available — downloading raw files..."
+  local downloaded=0
+  for p in $(echo "$SECLISTS_PATHS"); do
+    out="$SECLISTS_DIR/$p"
+    mkdir -p "$(dirname "$out")"
+    for BR in main master; do
+      url="https://raw.githubusercontent.com/danielmiessler/SecLists/$BR/$p"
       if curl -sSfL "$url" -o "$out"; then
-        info "saved: $out"
-      else
-        warn "failed to download $p from $BR"
-        rm -f "$out"
+        downloaded=$((downloaded+1))
+        break
       fi
     done
-    # stop after successful branch attempt
-    if find "$SECLISTS_DIR" -type f | read; then break; fi
   done
+  info "Downloaded $downloaded files into $SECLISTS_DIR"
 }
 
 # ---------- main ----------
@@ -264,8 +251,7 @@ main(){
   deploy_go_bins
   ensure_xray
   fetch_seclists_subset
-
-  info "All done. Reload shell (source ~/.bashrc) if needed."
+  info "✅ All done. Reload shell (source ~/.bashrc) if needed."
 }
 
 main "$@"
