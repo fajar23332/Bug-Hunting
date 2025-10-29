@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # setup-auto.sh — smarter setup: detect installed tools, install if missing, update if present
-
+APT_PKGS=(git curl wget ca-certificates build-essential python3 python3-pip python3-tk sqlmap unzip)
 run_sudo(){
   if [ "$EUID" -eq 0 ]; then
     "$@"
