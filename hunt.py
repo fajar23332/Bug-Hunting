@@ -468,13 +468,45 @@ def tool_xray():
     run_cmd(cmd)
 
 # ───────────────────────── FULL POWER ─────────────────────────
-def run_fullpower():
-    banner_section("FULL POWER")
+# ------------ helpers for fallback behavior ------------
+def file_has_lines(path):
+    try:
+        if not os.path.isfile(path):
+            return False
+        # count non-empty lines
+        with open(path, "r", encoding="utf-8", errors="ignore") as f:
+            for i, _ in enumerate(f, 1):
+                if i >= 1:
+                    break
+        return i >= 1
+    except Exception:
+        return False
+
+def read_lines(path):
+    try:
+        with open(path, "r", encoding="utf-8", errors="ignore") as f:
+            return [l.strip() for l in f if l.strip()]
+    except Exception:
+        return []
+
+# ------------ improved run_fullpower with fallback rules ------------
+def run_fullpower(try_both_schemes=False, no_fallback=False):
+    """
+    New fullpower flow with fallback:
+      - attempt subfinder -> if subs found use httpx -l
+      - if subs empty -> run httpx -u https://target (optionally try http if enabled)
+      - after httpx: if httpx list present -> nuclei -l
+      - if httpx empty -> nuclei -u https://target (optionally try http)
+    Parameters:
+      - try_both_schemes: bool, if True try https then http when falling back
+      - no_fallback: bool, if True DO NOT fallback to -u when lists are empty (abort that step)
+    """
+    banner_section("FULL POWER (smart fallback)")
 
     target = ask("Target root (example.com, NO https://)")
     speed  = ask("Threads (-t/-c for tools)", default="50")
 
-    nuclei_sev = prompt_nuclei_severity()  # always ask severity
+    nuclei_sev = prompt_nuclei_severity()  # list or []
 
     tclean    = sanitize_target_for_dir(target)
     temp_dir  = os.path.join(BBP_BASE, tclean)
@@ -486,61 +518,109 @@ def run_fullpower():
     httpx_file   = os.path.join(temp_dir, "httpx.txt")
     nuclei_file  = os.path.join(final_dir, "fullpower.json")
 
-    ts = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
-    print(Fore.MAGENTA + f"\n[ FULL POWER @ {ts} ]")
+    print(Fore.MAGENTA + f"\n[ FULL POWER @ {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')} ]")
     print(Fore.MAGENTA + f"Target   : {target}")
     print(Fore.MAGENTA + f"Temp dir : {temp_dir}")
     print(Fore.MAGENTA + f"Final    : {nuclei_file}")
-    print(Fore.YELLOW  + "\nChain: subfinder -> httpx -> nuclei\n")
+    print(Fore.YELLOW  + "\nChain logic: subfinder -> httpx -> nuclei (with fallback to -u when lists empty)\n")
 
-    # 1 subfinder
-    cmd_sub = [
+    # ---------- 1) subfinder ----------
+    print(Fore.CYAN + "\n[1] subfinder -> subs.txt")
+    run_cmd([
         "subfinder",
         "-d", target,
         "-t", speed,
         "-silent",
-        "-o", subs_file
-    ]
-    print(Fore.CYAN + "\n[1] subfinder -> subs.txt")
-    run_cmd(cmd_sub)
+        "-o", subs_file,
+    ])
 
-    # 2 httpx
-    cmd_httpx = [
-        "httpx",
-        "-l", subs_file,
-        "-mc", "200",
-        "-t", speed,
-        "-silent",
-        "-o", httpx_file
-    ]
-    print(Fore.CYAN + "\n[2] httpx -> httpx.txt")
-    run_cmd(cmd_httpx)
+    # normalize subs (dedupe, remove blanks)
+    if file_has_lines(subs_file):
+        subs = sorted(set(read_lines(subs_file)))
+        with open(subs_file, "w") as fh:
+            fh.write("\n".join(subs) + ("\n" if subs else ""))
+        print(Fore.YELLOW + f"[+] subfinder produced {len(subs)} entries")
+    else:
+        print(Fore.YELLOW + "[!] subfinder produced 0 entries")
 
-    # 3 nuclei (final json)
-    nuclei_cmd = [
-        "nuclei",
-        "-l", httpx_file,
-        "-c", speed,
-        "-o", nuclei_file
-    ]
+    # ---------- 2) httpx (choose -l or -u) ----------
+    def run_httpx_with_list(list_path, out_path):
+        cmd = [
+            "httpx",
+            "-l", list_path,
+            "-mc", "200",
+            "-t", speed,
+            "-silent",
+            "-o", out_path
+        ]
+        run_cmd(cmd)
+
+    def run_httpx_with_url(url, out_path):
+        cmd = [
+            "httpx",
+            "-u", url,
+            "-mc", "200",
+            "-t", speed,
+            "-silent",
+            "-o", out_path
+        ]
+        run_cmd(cmd)
+
+    # decide how to run httpx
+    if file_has_lines(subs_file):
+        print(Fore.CYAN + "\n[2] httpx -> using subs list (-l)")
+        run_httpx_with_list(subs_file, httpx_file)
+    else:
+        if no_fallback:
+            print(Fore.RED + "[!] No subs and --no-fallback set — skipping httpx fallback")
+        else:
+            # fallback: try https then optional http
+            print(Fore.CYAN + "\n[2] httpx -> fallback to root URL (-u)")
+            run_httpx_with_url(f"https://{target}", httpx_file)
+            if not file_has_lines(httpx_file) and try_both_schemes:
+                print(Fore.YELLOW + "[!] https returned no live endpoints, trying http://")
+                run_httpx_with_url(f"http://{target}", httpx_file)
+
+    # check httpx result
+    if file_has_lines(httpx_file):
+        live_count = len(read_lines(httpx_file))
+        print(Fore.YELLOW + f"[+] httpx produced {live_count} live endpoints")
+    else:
+        print(Fore.YELLOW + "[!] httpx produced 0 live endpoints")
+
+    # ---------- 3) nuclei (choose -l or -u) ----------
+    print(Fore.CYAN + "\n[3] nuclei -> final scan")
+    nuclei_cmd_base = ["nuclei"]
     if len(nuclei_sev) > 0:
-        nuclei_cmd += ["-severity", ",".join(nuclei_sev)]
+        nuclei_cmd_base += ["-severity", ",".join(nuclei_sev)]
+    nuclei_cmd_base += ["-o", nuclei_file]
 
-    print(Fore.CYAN + "\n[3] nuclei -> fullpower.json")
-    run_cmd(nuclei_cmd)
+    if file_has_lines(httpx_file):
+        # prefer file-based scan
+        cmd = nuclei_cmd_base + ["-l", httpx_file, "-c", speed]
+        run_cmd(cmd)
+    else:
+        if no_fallback:
+            print(Fore.RED + "[!] No httpx output and --no-fallback set — skipping nuclei fallback")
+        else:
+            # fallback: try nuclei -u https://target (and maybe http)
+            print(Fore.CYAN + "[*] nuclei fallback -> scanning root URL (-u)")
+            run_cmd(nuclei_cmd_base + ["-u", f"https://{target}", "-c", speed])
+            if try_both_schemes and (not os.path.isfile(nuclei_file) or os.path.getsize(nuclei_file) == 0):
+                print(Fore.YELLOW + "[!] nuclei https produced no results, trying http://")
+                run_cmd(nuclei_cmd_base + ["-u", f"http://{target}", "-c", speed])
 
-    # cleanup
+    # cleanup temp lists (optional)
     for f in [subs_file, httpx_file]:
         if os.path.isfile(f):
             try:
                 os.remove(f)
                 print(Fore.YELLOW + f"[cleanup] removed {f}")
-            except:
-                print(Fore.RED + f"[!] failed to remove {f}")
+            except Exception:
+                pass
 
     print(Fore.GREEN + "\n[✓] Full power finished.")
     print(Fore.GREEN + f"    Report -> {nuclei_file}\n")
-
 # ───────────────────────── ATTACK FOCUS ─────────────────────────
 def run_attack_focus():
     banner_section("ATTACK FOCUS")
