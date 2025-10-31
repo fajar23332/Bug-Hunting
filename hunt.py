@@ -716,12 +716,16 @@ def run_custom_chain():
             run_cmd(cmd)
             last_list_for_httpx = subs_file
 
-        elif step == "gau":
-            cmd = f"gau --subs {target} | tee {gau_file}"
-            print(Fore.CYAN + "\n[chain] gau -> gau.txt")
+       elif step == "gau":
+            # Perintah: cat subs.txt | gau | grep -v 'ekstensi statis' | tee gau.txt
+            static_filter = r'\.(jpg|jpeg|png|gif|css|js|ico|svg|woff|ttf|eot)'
+            
+            # Tambahkan filter ke dalam CMD
+            cmd = f"cat {subs_file} | gau | grep -v -E '{static_filter}' | tee {gau_file}"
+            
+            print(Fore.CYAN + "\n[chain] gau (input dari subs.txt & filter statis) -> gau.txt")
             run_cmd(cmd, shell=True)
             last_list_for_httpx = gau_file
-
         elif step == "httpx":
             if not last_list_for_httpx or not os.path.isfile(last_list_for_httpx):
                 print(Fore.RED + "[!] httpx has no input list. Skipping httpx.")
