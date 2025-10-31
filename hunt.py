@@ -647,6 +647,8 @@ def run_attack_focus():
     print(Fore.GREEN + f"    Final report -> {result_file}\n")
 
 # ───────────────────────── CUSTOM CHAIN ─────────────────────────
+# PERHATIAN: Asumsikan semua fungsi dan variabel (seperti banner_section, ask, Fore, os, run_cmd, XRAY_WRAPPER_BIN, dll.) sudah didefinisikan di tempat lain.
+
 def run_custom_chain():
     banner_section("CUSTOM CHAIN")
 
@@ -655,11 +657,11 @@ def run_custom_chain():
     speed  = ask("Speed / threads (-t/-c/etc)", default="50")
 
     # 2. ask tool order (multi in order)
-    #   subfinder -> subs.txt
-    #   gau       -> gau.txt
-    #   httpx     -> httpx.txt (from last list)
-    #   nuclei    -> final.json (ask severity)
-    #   xray      -> final.json (ask plugins)
+    #    subfinder -> subs.txt
+    #    gau        -> gau.txt
+    #    httpx      -> httpx.txt (from last list)
+    #    nuclei     -> final.json (ask severity)
+    #    xray       -> final.json (ask plugins)
     tool_map = {
         "1":("subfinder","subfinder"),
         "2":("gau","gau"),
@@ -674,18 +676,18 @@ def run_custom_chain():
         return
 
     # figure out which final step is last (for json)
-    tclean      = sanitize_target_for_dir(target)
-    temp_dir    = os.path.join(BBP_BASE, tclean)
+    tclean       = sanitize_target_for_dir(target)
+    temp_dir     = os.path.join(BBP_BASE, tclean)
     ensure_dir(temp_dir)
 
-    custom_dir  = os.path.join(CUSTOM_BASE, tclean)
+    custom_dir   = os.path.join(CUSTOM_BASE, tclean)
     ensure_dir(custom_dir)
 
-    final_json  = os.path.join(custom_dir, f"{tclean}.json")
+    final_json   = os.path.join(custom_dir, f"{tclean}.json")
 
-    subs_file   = os.path.join(temp_dir, "subs.txt")
-    gau_file    = os.path.join(temp_dir, "gau.txt")
-    httpx_file  = os.path.join(temp_dir, "httpx.txt")
+    subs_file    = os.path.join(temp_dir, "subs.txt")
+    gau_file     = os.path.join(temp_dir, "gau.txt")
+    httpx_file   = os.path.join(temp_dir, "httpx.txt")
 
     # pre-ask nuclei severity if nuclei is in chain
     nuclei_sev = []
@@ -698,12 +700,13 @@ def run_custom_chain():
         xray_plugs = prompt_xray_plugins()
 
     # run chain sequentially
-    last_list_for_httpx = None  # store path of last URL list to feed into httpx/nuclei/xray
+    last_list_for_httpx = None  # store path of last URL list to feed into httpx/nuclei/xray
     # logic: after subfinder -> use subs.txt
     # after gau -> use gau.txt
     # after httpx -> use httpx.txt
 
     for step in chain_list:
+        # PERBAIKAN 1: Indentasi untuk blok 'for'
         if step == "subfinder":
             cmd = [
                 "subfinder",
@@ -716,17 +719,21 @@ def run_custom_chain():
             run_cmd(cmd)
             last_list_for_httpx = subs_file
 
-         elif step == "gau":
+        # PERBAIKAN 2: Indentasi dan Logika GAU (membaca subs_file dan memfilter)
+        elif step == "gau":
             # Perintah: cat subs.txt | gau | grep -v 'ekstensi statis' | tee gau.txt
-            static_filter = r'\.(jpg|jpeg|png|gif|css|js|ico|svg|woff|ttf|eot)'
+            static_filter = r'\.(jpg|jpeg|png|gif|css|js|ico|svg|woff|ttf|eot|\.xml|\.json)' # Tambahkan filter .json dan .xml
             
             # Tambahkan filter ke dalam CMD
+            # Menggunakan cat {subs_file} | gau agar GAU memproses multi-target
             cmd = f"cat {subs_file} | gau | grep -v -E '{static_filter}' | tee {gau_file}"
             
             print(Fore.CYAN + "\n[chain] gau (input dari subs.txt & filter statis) -> gau.txt")
             run_cmd(cmd, shell=True)
             last_list_for_httpx = gau_file
-           elif step == "httpx":
+        
+        # PERBAIKAN 3: Indentasi 'elif httpx'
+        elif step == "httpx":
             if not last_list_for_httpx or not os.path.isfile(last_list_for_httpx):
                 print(Fore.RED + "[!] httpx has no input list. Skipping httpx.")
                 continue
@@ -742,7 +749,8 @@ def run_custom_chain():
             run_cmd(cmd)
             last_list_for_httpx = httpx_file
 
-           elif step == "nuclei":
+        # PERBAIKAN 4: Indentasi 'elif nuclei'
+        elif step == "nuclei":
             # pick best input: prefer httpx_file, else gau_file, else subs_file
             nuclei_input = None
             if os.path.isfile(httpx_file):
@@ -768,7 +776,8 @@ def run_custom_chain():
             print(Fore.CYAN + "\n[chain] nuclei -> final json")
             run_cmd(nuclei_cmd)
 
-             elif step == "xray":
+        # PERBAIKAN 5: Indentasi 'elif xray'
+        elif step == "xray":
             # pick best input for xray: prefer httpx_file else gau_file
             xray_input = None
             if os.path.isfile(httpx_file):
@@ -803,7 +812,7 @@ def run_custom_chain():
                 print(Fore.RED + f"[!] failed to remove {f}")
 
     print(Fore.GREEN + "\n[✓] Custom chain finished.")
-    print(Fore.GREEN + f"    Final report -> {final_json}\n")
+    print(Fore.GREEN + f"     Final report -> {final_json}\n")
 
 # ───────────────────────── MENUS ─────────────────────────
 def recon_menu():
