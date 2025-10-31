@@ -717,7 +717,8 @@ def run_custom_chain():
             last_list_for_httpx = subs_file
 
         elif step == "gau":
-            cmd = f"cat {subs_file} | gau | tee {gau_file}"
+            static_filter = r'\.(jpg|jpeg|png|gif|css|js|ico|svg|woff|ttf|eot|webp|xml|json)'
+            cmd = f"cat {subs_file} | gau | grep -v -E '{static_filter}' | tee {gau_file}"
             print(Fore.CYAN + "\n[chain] gau -> gau.txt")
             run_cmd(cmd, shell=True)
             last_list_for_httpx = gau_file
