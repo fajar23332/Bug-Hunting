@@ -704,7 +704,7 @@ def run_custom_chain():
     # after httpx -> use httpx.txt
 
     for step in chain_list:
-        if step == "subfinder":
+    if step == "subfinder":
             cmd = [
                 "subfinder",
                 "-d", target,
